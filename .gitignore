@@ -1,3 +1,12 @@
+# Torch datas.
+data/
+
+# Model weights.
+*.pth
+
+# Tmp pngs.
+*.tmp.png
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
