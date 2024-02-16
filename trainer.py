@@ -12,7 +12,9 @@ class TrainProgress(rich.progress.Progress):
     def __init__(
         self: 'TrainProgress',
         nb_epochs: int,
-        epoch_size: int,
+        train_size: int,
+        val_size: int = 0,
+        test_size: int = 0,
         *columns: str | rich.progress.ProgressColumn,
         console: rich.progress.Console | None = None,
         auto_refresh: bool = True,
@@ -29,7 +31,9 @@ class TrainProgress(rich.progress.Progress):
 
         Args:
             nb_epochs (int): The number of epochs.
-            epoch_size (int): The size of each epoch.
+            train_size (int): The size of each tain epoch.
+            val_size (int, optional): The size of each validation epoch. Defaults to 0.
+            test_size (int, optional): The size of the test epoch. Defaults to 0.
             *columns (str | rich.progress.ProgressColumn): The columns to display.
             console (rich.progress.Console, optional): The console to use. Defaults to None.
             auto_refresh (bool, optional): Whether to automatically refresh the progress bar. Defaults to True.
@@ -43,7 +47,9 @@ class TrainProgress(rich.progress.Progress):
             expand (bool, optional): Whether to expand the progress bar. Defaults to False.
         """
         self.nb_epochs = nb_epochs
-        self.epoch_size = epoch_size
+        self.train_size = train_size
+        self.val_size = val_size
+        self.test_size = test_size
         super().__init__(
             *columns,
             console=console,
@@ -57,9 +63,17 @@ class TrainProgress(rich.progress.Progress):
             disable=disable,
             expand=expand,
         )
-        self.epoch_tasks = []
-        self.total_task = self.add_task("total", progress_type="total", total=nb_epochs*epoch_size)
-        self.values = {}
+        self.train_tasks = []
+        self.val_tasks = []
+        self.test_task = None
+        self.total_task = self.add_task(
+            "total",
+            progress_type="total",
+            total=nb_epochs * (train_size + val_size) + test_size,
+        )
+        self.train_values = []
+        self.val_values = []
+        self.test_values = {}
 
     def get_renderables(self: 'TrainProgress'):
         """Override the default renderables to display the epoch number."""
@@ -68,37 +82,158 @@ class TrainProgress(rich.progress.Progress):
             # The total task.
             if task.fields.get("progress_type") == "total":
                 self.columns = (
-                    f"Training:",
+                    f"Working:",
                     rich.progress.BarColumn(),
-                    f"{len(self.epoch_tasks):{pad}}/{self.nb_epochs}",
+                    f"{len(self.train_tasks):{pad}}/{self.nb_epochs}",
                     "•",
                     rich.progress.TimeRemainingColumn(),
                 )
 
-            # The epoch tasks.
-            if task.fields.get("progress_type") == "epoch":
+            # The train tasks.
+            if task.fields.get("progress_type") == "train":
                 epoch_id = task.fields.get("epoch_id")
                 self.columns = (
-                    f"Epoch {epoch_id:{pad}}:",
+                    f"Train {epoch_id:{pad}}:",
                     rich.progress.BarColumn(),
                     f"{task.completed}/{task.total}",
                     "•",
                     rich.progress.TimeElapsedColumn(),
                     '•',
-                    ' | '.join(f"{key}: {value[-1]:.4f} " for key, value in self.values.items()),
+                    ' | '.join(
+                        f"{key}: {value[-1]:.4f}" for key, value in self.train_values[epoch_id-1].items()),
+                )
+
+            # The val tasks.
+            if task.fields.get("progress_type") == "val":
+                epoch_id = task.fields.get("epoch_id")
+                self.columns = (
+                    f"Val {epoch_id:{pad}}:",
+                    rich.progress.BarColumn(),
+                    f"{task.completed}/{task.total}",
+                    "•",
+                    rich.progress.TimeElapsedColumn(),
+                    '•',
+                    ' | '.join(
+                        f"{key}: {value[-1]:.4f}" for key, value in self.val_values[epoch_id-1].items()),
+                )
+
+            # The test task.
+            if task.fields.get("progress_type") == "test":
+                self.columns = (
+                    f"Test:",
+                    rich.progress.BarColumn(),
+                    f"{task.completed}/{task.total}",
+                    "•",
+                    rich.progress.TimeElapsedColumn(),
+                    '•',
+                    ' | '.join(
+                        f"{key}: {value[-1]:.4f}" for key, value in self.test_values.items()),
                 )
 
             yield self.make_tasks_table([task])
 
-    def new_epoch(self: 'TrainProgress'):
-        """Create a new epoch task."""
-        epoch_task = self.add_task(
-            "epoch",
-            progress_type="epoch",
-            epoch_id=len(self.epoch_tasks) + 1,
-            total=self.epoch_size,
-        )
-        self.epoch_tasks.append(epoch_task)
+    def step_test(self: 'TrainProgress', count: int) -> bool:
+        """Advance the progress bar by the given number of steps.
+
+        Args:
+            count (int): The number of steps to advance the progress bar by.
+
+        Returns:
+            bool: Whether step was successful.
+        """
+        if len(self.train_tasks) < self.nb_epochs:
+            return False
+
+        if self.tasks[self.train_tasks[-1]].completed < self.train_size:
+            return False
+
+        if self.val_size > 0:
+            if len(self.val_tasks) < self.nb_epochs:
+                return False
+
+            if self.tasks[self.val_tasks[-1]].completed < self.val_size:
+                return False
+
+        if self.test_size == 0:
+            return False
+
+        if self.test_task is None:
+            self.test_task = self.add_task(
+                "Test",
+                progress_type="test",
+                total=self.test_size,
+            )
+            self.update(self.test_task, advance=count)
+            self.update(self.total_task, advance=count)
+            return True
+
+        if self.test_task is not None:
+            self.update(self.test_task, advance=count)
+            self.update(self.total_task, advance=count)
+            return True
+
+    def step_val(self: 'TrainProgress', count: int) -> bool:
+        """Advance the progress bar by the given number of steps.
+
+        Args:
+            count (int): The number of steps to advance the progress bar by.
+
+        Returns:
+            bool: Whether step was successful.
+        """
+        if len(self.train_tasks) == 0:
+            return False
+
+        if self.tasks[self.train_tasks[-1]].completed < self.train_size:
+            return False
+
+        if self.val_size == 0:
+            return False
+
+        if len(self.val_tasks) == 0 or (
+            len(self.val_tasks) < self.nb_epochs
+            and len(self.val_tasks) < len(self.train_tasks)
+        ):
+            self.val_values.append({})
+            self.val_tasks.append(self.add_task(
+                f"Val {len(self.val_tasks)+1}",
+                progress_type="val",
+                epoch_id=len(self.val_tasks)+1,
+                total=self.val_size,
+            ))
+            self.update(self.val_tasks[-1], advance=count)
+            self.update(self.total_task, advance=count)
+            return True
+
+        if self.tasks[self.val_tasks[-1]].completed < self.val_size:
+            self.update(self.val_tasks[-1], advance=count)
+            self.update(self.total_task, advance=count)
+            return True
+
+    def step_train(self: 'TrainProgress', count: int) -> bool:
+        """Advance the progress bar by the given number of steps.
+
+        Args:
+            count (int): The number of steps to advance the progress bar by.
+
+        Returns:
+            bool: Whether step was successful.
+        """
+        if len(self.train_tasks) == 0 or self.tasks[self.train_tasks[-1]].completed == self.train_size:
+            self.train_values.append({})
+            self.train_tasks.append(self.add_task(
+                f"Train {len(self.train_tasks)+1}",
+                progress_type="train",
+                epoch_id=len(self.train_tasks)+1,
+                total=self.train_size,
+            ))
+            self.update(self.train_tasks[-1], advance=count)
+            self.update(self.total_task, advance=count)
+            return True
+
+        self.update(self.train_tasks[-1], advance=count)
+        self.update(self.total_task, advance=count)
+        return True
 
     def step(self: 'TrainProgress', count: int = 1):
         """Advance the progress bar by the given number of steps.
@@ -106,20 +241,46 @@ class TrainProgress(rich.progress.Progress):
         Args:
             count (int): The number of steps to advance the progress bar by.
         """
-        if len(self.epoch_tasks) == 0 or self.tasks[self.epoch_tasks[-1]].completed == self.epoch_size:
-            self.new_epoch()
-        self.update(self.epoch_tasks[-1], advance=count)
-        self.update(self.total_task, advance=count)
+        if self.step_test(count):
+            return
 
-    def new_values(self: 'TrainProgress', **values: Any):
+        if self.step_val(count):
+            return
+
+        if self.step_train(count):
+            return
+
+        raise RuntimeError("Progress bar already finished.")
+
+    def new_train_values(self: 'TrainProgress', values: dict[str, Any]):
         """Update the progress bar with new values.
 
         Args:
-            **values (Any): The values to update the progress bar with.
+            values (dict[str, Any]): The new values.
         """
         for key, value in values.items():
-            current_value = self.values.get(key, [])
-            self.values[key] = current_value + [value]
+            current_value = self.train_values[-1].get(key, [])
+            self.train_values[-1][key] = current_value + [value]
+
+    def new_val_values(self: 'TrainProgress', values: dict[str, Any]):
+        """Update the progress bar with new values.
+
+        Args:
+            values (dict[str, Any]): The new values.
+        """
+        for key, value in values.items():
+            current_value = self.val_values[-1].get(key, [])
+            self.val_values[-1][key] = current_value + [value]
+
+    def new_test_values(self: 'TrainProgress', values: dict[str, Any]):
+        """Update the progress bar with new values.
+
+        Args:
+            values (dict[str, Any]): The new values.
+        """
+        for key, value in values.items():
+            current_value = self.test_values.get(key, [])
+            self.test_values[key] = current_value + [value]
 
 
 class Trainer:
@@ -136,8 +297,10 @@ class Trainer:
         epochs: int,
         optimizer: torch.optim.Optimizer,
         criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-        device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
         val_loader: torch.utils.data.DataLoader | None = None,
+        test_loader: torch.utils.data.DataLoader | None = None,
+        metrics: List[Callable[[torch.Tensor,
+                                torch.Tensor], torch.Tensor]] = [],
     ):
         """Train the model for the given number of epochs.
 
@@ -147,12 +310,13 @@ class Trainer:
             epochs (int): The number of epochs to train the model for.
             optimizer (torch.optim.Optimizer): The optimizer to use.
             criterion (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): The loss function to use.
-            device (torch.device, optional): The device to use. Defaults to torch.device('cuda' if torch.cuda.is_available() else 'cpu').
             val_loader (torch.utils.data.DataLoader, optional): The validation dataset. Defaults to None.
         """
         with TrainProgress(
             nb_epochs=epochs,
-            epoch_size=len(train_loader),
+            train_size=len(train_loader),
+            val_size=len(val_loader) if val_loader else 0,
+            test_size=len(test_loader) if test_loader else 0,
         ) as progress:
             self.progress = progress
 
@@ -162,15 +326,20 @@ class Trainer:
                     train_loader,
                     optimizer,
                     criterion,
-                    device,
+                    metrics,
                 )
                 if val_loader:
                     self.validate(
                         model,
                         val_loader,
-                        criterion,
-                        device,
+                        metrics + [criterion],
                     )
+            if test_loader:
+                self.test(
+                    model,
+                    test_loader,
+                    metrics + [criterion],
+                )
 
     def train_epoch(
         self: 'Trainer',
@@ -178,7 +347,7 @@ class Trainer:
         train_loader: torch.utils.data.DataLoader,
         optimizer: torch.optim.Optimizer,
         criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-        device: torch.device,
+        metrics: list[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
     ):
         """Train the model for one epoch.
 
@@ -187,13 +356,10 @@ class Trainer:
             train_loader (torch.utils.data.DataLoader): The training dataset.
             optimizer (torch.optim.Optimizer): The optimizer to use.
             criterion (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): The loss function to use.
-            device (torch.device): The device to use.
+            metrics (list[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]): The metrics to use.
         """
         model.train()
         for batch in train_loader:
-            # Move the batch to the device.
-            batch = [b.to(device) for b in batch]
-
             # Seprarate the inputs and labels.
             inputs = batch[:-1]
             labels = batch[-1]
@@ -206,27 +372,66 @@ class Trainer:
             optimizer.step()
 
             # Update the progress bar.
-            self.progress.new_values(loss=loss.item())
+            values = {metric.__name__: metric(output, labels)
+                      for metric in metrics}
+            values[criterion.__name__] = loss.item()
             self.progress.step()
+            self.progress.new_train_values(values)
 
     def validate(
         self: 'Trainer',
         model: torch.nn.Module,
         val_loader: torch.utils.data.DataLoader,
-        criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-        device: torch.device,
+        metrics: list[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
     ):
         """Validate the model on the given validation dataset.
 
         Args:
             model (torch.nn.Module): The model to validate.
             val_loader (torch.utils.data.DataLoader): The validation dataset.
-            criterion (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): The loss function to use.
-            device (torch.device): The device to use.
+            mectrics (list[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]): The metrics to use.
         """
         model.eval()
         with torch.no_grad():
-            for batch in val_loader:
-                batch = [b.to(device) for b in batch]
-                output = model(batch[:-1])
-                loss = criterion(output, batch[-1])
+            metrics_sum = {f'val_{metric.__name__}': 0 for metric in metrics}
+            for b_i, batch in enumerate(val_loader):
+                inputs = batch[:-1]
+                labels = batch[-1]
+                output = model(*inputs)
+                values = {f'val_{metric.__name__}': metric(output, labels)
+                          for metric in metrics}
+                for key, value in values.items():
+                    metrics_sum[key] += value.item()
+                self.progress.step()
+                self.progress.new_val_values({
+                    key: value / (b_i + 1) for key, value in metrics_sum.items()
+                })
+
+    def test(
+        self: 'Trainer',
+        model: torch.nn.Module,
+        test_loader: torch.utils.data.DataLoader,
+        metrics: list[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
+    ):
+        """Test the model on the given test dataset.
+
+        Args:
+            model (torch.nn.Module): The model to test.
+            test_loader (torch.utils.data.DataLoader): The test dataset.
+            mectrics (list[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]): The metrics to use.
+        """
+        model.eval()
+        with torch.no_grad():
+            metrics_sum = {f'test_{metric.__name__}': 0 for metric in metrics}
+            for b_i, batch in enumerate(test_loader):
+                inputs = batch[:-1]
+                labels = batch[-1]
+                output = model(*inputs)
+                values = {f'test_{metric.__name__}': metric(output, labels)
+                          for metric in metrics}
+                for key, value in values.items():
+                    metrics_sum[key] += value.item()
+                self.progress.step()
+                self.progress.new_test_values({
+                    key: value / (b_i + 1) for key, value in metrics_sum.items()
+                })
