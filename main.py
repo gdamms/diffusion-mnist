@@ -16,76 +16,69 @@ class UNet(nn.Module):
     def __init__(self):
         super().__init__()
 
-        # Input
-        # The input to the model is a 11 vector which represents the desired label with the contextual information.
-        # The Input is passed through layers to generate a 1x28x28, 1x14x14, 1x7x7 tensor.
-        # -------
-        # input: 1x11
-        self.inconv1 = nn.Linear(11, 28 * 28)
-        self.inconv2 = nn.Linear(11, 14 * 14)
-        self.inconv3 = nn.Linear(11, 7 * 7)
+        ## Inputs:
+        # xt: image at step t (1x28x28)
+        # t: step number (1)
+        # vec: one-hot vector of the label (10)
 
-        # Encoder
-        # In the encoder, convolutional layers with the Conv2d function are used to extract features from the input image.
-        # Each block in the encoder consists of two convolutional layers followed by a max-pooling layer,
-        # with the exception of the last block which does not include a max-pooling layer.
-        # -------
-        # input: 28x28x1
-        self.e11 = nn.Conv2d(1, 64, kernel_size=3, padding=1)  # output: 28x28x64
-        self.e12 = nn.Conv2d(64, 64, kernel_size=3, padding=1)  # output: 28x28x64
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)  # output: 14x14x64
+        ## Encoder for t
+        self.encodet = nn.Linear(1, 28*28)
 
-        # input: 14x14x64
-        self.e21 = nn.Conv2d(64, 128, kernel_size=3, padding=1)  # output: 14x14x128
-        self.e22 = nn.Conv2d(128, 128, kernel_size=3, padding=1)  # output: 14x14x128
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)  # output: 7x7x128
+        ## Encoder for vec
+        self.encodevec = nn.Linear(10, 28*28)
 
-        # input: 7x7x128
-        self.e31 = nn.Conv2d(129, 256, kernel_size=3, padding=1)  # output: 7x7x256
-        self.e32 = nn.Conv2d(257, 256, kernel_size=3, padding=1)  # output: 7x7x256
-
-        # Decoder
-        # In the decoder, the output of the encoder is upsampled using the ConvTranspose2d function.
-        # Each block in the decoder consists of two convolutional layers followed by an upsampling layer,
-        # with the exception of the last block which does not include an upsampling layer.
-        # -------
-        # input: 7x7x256
-        self.upconv1 = nn.ConvTranspose2d(
-            256, 128, kernel_size=2, stride=2
-        )  # output: 14x14x128
-        self.d11 = nn.Conv2d(
-            256, 128, kernel_size=3, padding=1
-        )  # output: 14x14x(128x2)
-        self.d12 = nn.Conv2d(128, 128, kernel_size=3, padding=1)  # output: 14x14x128
-
-        # input: 14x14x128
-        self.upconv2 = nn.ConvTranspose2d(
-            128, 64, kernel_size=2, stride=2
-        )  # output: 28x28x64
-        self.d21 = nn.Conv2d(128, 64, kernel_size=3, padding=1)  # output: 28x28x(64x2)
-        self.d22 = nn.Conv2d(64, 64, kernel_size=3, padding=1)  # output: 28x28x64
-
-        # Output
-        # The output of the decoder is passed through a convolutional layer with the Conv2d function to obtain the final output.
-        # -------
-        # input: 28x28x64
-        self.outconv = nn.Conv2d(64, 1, kernel_size=1)  # output: 28x28x2
+        ## UNet
+        self.conv1 = nn.Conv2d(3, 64, 3, padding=1)
+        self.conv2 = nn.Conv2d(64, 64, 3, padding=1)
+        self.maxpool1 = nn.MaxPool2d(2, 2)  # 28x28 -> 14x14
+        self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
+        self.conv4 = nn.Conv2d(128, 128, 3, padding=1)
+        self.maxpool2 = nn.MaxPool2d(2, 2) # 14x14 -> 7x7
+        self.conv5 = nn.Conv2d(128, 256, 3, padding=1)
+        self.conv6 = nn.Conv2d(256, 256, 3, padding=1)
+        self.upconv1 = nn.ConvTranspose2d(256, 128, 2, stride=2) # 7x7 -> 14x14
+        self.conv7 = nn.Conv2d(256, 128, 3, padding=1)
+        self.conv8 = nn.Conv2d(128, 128, 3, padding=1)
+        self.upconv2 = nn.ConvTranspose2d(128, 64, 2, stride=2) # 14x14 -> 28x28
+        self.conv9 = nn.Conv2d(128, 64, 3, padding=1)
+        self.conv10 = nn.Conv2d(64, 64, 3, padding=1)
+        self.conv11 = nn.Conv2d(64, 1, 3, padding=1)
 
     def forward(self, xt, t, vec):
         # Encode t and vec
         t = F.relu(self.encodet(t))
+        t = t.view(-1, 1, 28, 28)
         vec = F.relu(self.encodevec(vec))
+        vec = vec.view(-1, 1, 28, 28)
 
         # Concat all 3
-        x = torch.cat((xt, t, vec), )
-        # TODO
+        x = torch.cat((xt, t, vec), dim=1)
 
-        return x
+        # UNet
+        x1 = F.relu(self.conv1(x))
+        x1 = F.relu(self.conv2(x1))
+        x2 = self.maxpool1(x1)
+        x2 = F.relu(self.conv3(x2))
+        x2 = F.relu(self.conv4(x2))
+        x3 = self.maxpool2(x2)
+        x3 = F.relu(self.conv5(x3))
+        x3 = F.relu(self.conv6(x3))
+        x4 = self.upconv1(x3)
+        x4 = torch.cat((x4, x2), dim=1)
+        x4 = F.relu(self.conv7(x4))
+        x4 = F.relu(self.conv8(x4))
+        x5 = self.upconv2(x4)
+        x5 = torch.cat((x5, x1), dim=1)
+        x5 = F.relu(self.conv9(x5))
+        x5 = F.relu(self.conv10(x5))
+        x5 = self.conv11(x5)
+
+        return x5
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DIFFU_STEPS = 100
+DIFFU_STEPS = 20
 BETA = torch.linspace(0.0001, 0.2, DIFFU_STEPS, device=DEVICE)
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
@@ -93,33 +86,34 @@ SIGMA2 = BETA
 
 
 def q_xt_xt_1(xt_1, t):
-    beta = BETA[t]
+    t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
+    beta = BETA[t_ind]
     mean = torch.sqrt(1 - beta) * xt_1
     std = beta
     return torch.distributions.Normal(mean, std)
 
 
 def q_xt_x0(x0, t):
-    alpha_bar = ALPHA_BAR[t]
+    t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
+    alpha_bar = ALPHA_BAR[t_ind]
     mean = torch.sqrt(alpha_bar) * x0
     std = 1 - alpha_bar
     return torch.distributions.Normal(mean, std)
 
 
 def p_xt_1_xt(model, xt, t, vec):
-    if not 0 < t <= DIFFU_STEPS:
-        raise Exception('Steps out of range')
-    alpha_bar_t = ALPHA_BAR[t]
-    alpha_bar_t_1 = ALPHA_BAR[t-1]
-    alpha_t = ALPHA[t]
-    beta_t = BETA[t]
+    t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
+    alpha_bar_t = ALPHA_BAR[t_ind]
+    alpha_bar_t_1 = ALPHA_BAR[t_ind-1]
+    alpha_t = ALPHA[t_ind]
+    beta_t = BETA[t_ind]
     beta_tilde = (1 - alpha_bar_t_1) / (1 - alpha_bar_t) * beta_t
 
     epsilon_theta = model(xt, t, vec)
 
     # sigma_theta = torch.exp(nu * torch.log(beta_t) + (1 - nu) * torch.log(beta_tilde))
     sigma_theta = beta_tilde
-    mu_theta = (xt - beta_t / (torch.sqrt(1 - alpha_bar_t) * epsilon_theta)) / torch.sqrt(alpha_t)
+    mu_theta = (xt - beta_t / torch.sqrt(1 - alpha_bar_t) * epsilon_theta) / torch.sqrt(alpha_t)
 
     return torch.distributions.Normal(mu_theta, sigma_theta)
 
@@ -154,21 +148,16 @@ class MNISTDiffusionDataset(Dataset):
             xt.clone().detach().to(dtype=torch.float32, device=DEVICE),
             t.clone().detach().to(dtype=torch.float32, device=DEVICE),
             vec.clone().detach().to(dtype=torch.float32, device=DEVICE),
-            (
-                img.clone().detach().to(dtype=torch.float32, device=DEVICE),
-                eps,
-                t,
-            ),
+            eps,
         )
 
     def __len__(self):
         return len(self.mnist_data)
 
 
-def loss_fn(y_pred, y_true):
-    x0, eps, t = y_true
-    eps_theta = y_pred
-    return nn.MSELoss()(eps_theta, eps)
+def loss(y_pred, y_true):
+    return nn.MSELoss()(y_pred, y_true)
+
 
 
 mnist_data = datasets.MNIST(
@@ -180,13 +169,13 @@ mnist_data = datasets.MNIST(
 img, label = mnist_data[0]
 img = img.to(DEVICE)
 fig = plt.figure(figsize=(DIFFU_STEPS, 2))
-for t_1 in range(0, DIFFU_STEPS):
-    xt_1 = q_xt_x0(img, t_1).sample()
-    x_t = q_xt_xt_1(xt_1, t_1 + 1).sample()
-    ax = fig.add_subplot(2, DIFFU_STEPS, t_1 + 1)
+for t in range(1, DIFFU_STEPS):
+    xt_1 = q_xt_x0(img, t - 1).sample()
+    x_t = q_xt_xt_1(xt_1, t).sample()
+    ax = fig.add_subplot(2, DIFFU_STEPS, t)
     ax.imshow(xt_1[0].cpu(), cmap="gray")
     ax.axis("off")
-    ax = fig.add_subplot(2, DIFFU_STEPS, DIFFU_STEPS + t_1 + 1)
+    ax = fig.add_subplot(2, DIFFU_STEPS, DIFFU_STEPS + t)
     ax.imshow(x_t[0].cpu(), cmap="gray")
     ax.axis("off")
 fig.tight_layout()
@@ -201,156 +190,39 @@ torch.multiprocessing.set_start_method("spawn")
 
 # Load the model.
 model = UNet().to(DEVICE)
-# model.load_state_dict(torch.load('model.pth'))
+model.load_state_dict(torch.load('model.pth'))
 
 # Define the optimizer.
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
 
 # Define the training dataset.
 train_dataset = MNISTDiffusionDataset(train=True)
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4)
 trainer = Trainer()
-criterion = loss_fn
-epochs = 1
+criterion = loss
+epochs = 5
 
-# Train the model.
-trainer.train(model, train_loader, epochs, optimizer, criterion)
+# # Train the model.
+# trainer.train(model, train_loader, epochs, optimizer, criterion)
 
-# Save the model.
-torch.save(model.state_dict(), "model.pth")
+# # Save the model.
+# torch.save(model.state_dict(), "model.pth")
 
 
 ##############
 # Evaluation #
 ##############
 
-# for data in train_loader:
-#     input, vector, (x0, eps, t) = data
-#     eps_theta = model(input, vector)
+x = torch.randn(1, 1, 28, 28).to(DEVICE)
+vec = torch.nn.functional.one_hot(torch.randint(0, 10, (1, 1)), num_classes=10).to(device=DEVICE, dtype=torch.float32)
+print(vec)
 
-#     fig = plt.figure(figsize=(2, 2))
-#     ax = fig.add_subplot(2, 2, 1)
-#     ax.imshow(eps[0].cpu().transpose(0, 2).transpose(0, 1), cmap='gray')
-#     ax.axis('off')
-#     ax = fig.add_subplot(2, 2, 2)
-#     ax.imshow(eps_theta[0].cpu().detach().transpose(
-#         0, 2).transpose(0, 1), cmap='gray')
-#     ax.axis('off')
-#     ax = fig.add_subplot(2, 2, 3)
-#     ax.imshow((eps[0] - eps_theta[0]).cpu().detach().transpose(
-#         0, 2).transpose(0, 1), cmap='gray')
-#     ax.axis('off')
-#     ax = fig.add_subplot(2, 2, 4)
-#     ax.imshow(x0[0].cpu().transpose(0, 2).transpose(0, 1), cmap='gray')
-#     ax.axis('off')
-#     fig.tight_layout()
-#     fig.savefig('eps.tmp.png')
-#     exit()
-
-# Load the model.
-model = UNet().to(DEVICE)
-model.load_state_dict(torch.load("model.pth"))
-
-# Set the model to evaluation mode.
-model.eval()
-
-n = 10
-fig = plt.figure(figsize=(2 * 2 * n, 3 * 2))
-gs = plt.GridSpec(nrows=3, ncols=2 * 2 * n)
-for i in range(n):
-    # Get the i-th input and its label.
-    input, vector, (x0, eps, t) = train_dataset[i]
-
-    xt_1 = q_xt_x0(input, t - 1).sample()
-    xt = q_xt_xt_1(xt_1, t).sample()
-    xt_1_pred = p_xt_1_xt(
-        model,
-        xt.unsqueeze(0),
-        vector.unsqueeze(0),
-    ).sample()
-
-    # Plot the input.
-    ax = fig.add_subplot(gs[0:1, 1 + 4 * i : 3 + 4 * i])
-    ax.imshow(xt[0].cpu(), cmap="gray")
+fig = plt.figure(figsize=(DIFFU_STEPS, 2))
+for ti in range(1, DIFFU_STEPS):
+    t = torch.tensor([[ti]], device=DEVICE, dtype=torch.float32)
+    x = p_xt_1_xt(model, x, t, vec).sample()
+    ax = fig.add_subplot(1, DIFFU_STEPS, ti)
+    ax.imshow(x[0, 0].detach().cpu(), cmap="gray")
     ax.axis("off")
-
-    # Plot the label.
-    ax = fig.add_subplot(gs[1:2, 4 * i : 2 + 4 * i])
-    ax.imshow(xt_1[0].cpu(), cmap="gray")
-    ax.axis("off")
-
-    # Plot the model output.
-    ax = fig.add_subplot(gs[1:2, 2 + 4 * i : 4 + 4 * i])
-    ax.imshow(xt_1_pred[0, 0].cpu().detach(), cmap="gray")
-    ax.axis("off")
-
-    # Plot the difference between the label and the model output.
-    ax = fig.add_subplot(gs[2:3, 1 + 4 * i : 3 + 4 * i])
-    ax.imshow((xt_1.cpu() - xt_1_pred[0, 0].cpu().detach())[0], cmap="coolwarm")
-    ax.axis("off")
-
 fig.tight_layout()
-fig.savefig("diff.tmp.png")
-
-
-# Plot the evolution of the noise.
-fig = plt.figure(figsize=(n, DIFFU_STEPS))
-noises = np.random.normal(0, 1, (n, 1, 28, 28))
-noises = torch.Tensor(noises).to(DEVICE)
-vector = torch.nn.functional.one_hot(torch.tensor(range(n)), num_classes=10).to(DEVICE)
-vector = vector.clone().detach().to(dtype=torch.float32)
-
-# Apply the model multiple times.
-for i in range(DIFFU_STEPS):
-    t = DIFFU_STEPS - i - 1
-    noises = p_xt_1_xt(
-        model,
-        noises,
-        torch.cat(
-            [
-                vector,
-                torch.tensor([t] * n)
-                .unsqueeze(-1)
-                .to(device=DEVICE)
-                .to(dtype=torch.long),
-            ],
-            dim=-1,
-        ),
-    ).sample()
-
-    for j in range(n):
-        ax = fig.add_subplot(DIFFU_STEPS, n, i * n + j + 1)
-        ax.imshow(noises[j, 0].cpu().detach(), cmap="gray")
-        ax.axis("off")
-
-fig.tight_layout()
-fig.savefig("diffu.tmp.png")
-
-# Plot bench of generated images.
-fig = plt.figure(figsize=(n, n))
-noises = np.random.normal(0, 1, (n * n, 1, 28, 28))
-noises = torch.Tensor(noises).to(DEVICE)
-vector = torch.nn.functional.one_hot(torch.tensor([range(n)] * n), num_classes=10).to(
-    DEVICE
-)
-vector = vector.clone().detach().to(dtype=torch.float32)
-
-# Apply the model multiple times.
-for i in range(DIFFU_STEPS):
-    t = DIFFU_STEPS - i - 1
-    noises = model(
-        noises,
-        torch.cat(
-            [vector, torch.tensor([[t] * n] * n).unsqueeze(-1).to(DEVICE)], dim=-1
-        ),
-    )
-
-for i in range(n * n):
-    ax = fig.add_subplot(n, n, i + 1)
-    ax.imshow(noises[i, 0].cpu().detach(), cmap="gray")
-    ax.axis("off")
-
-fig.tight_layout()
-fig.savefig("bench.tmp.png")
-
-plt.close("all")
+fig.savefig("diffused.tmp.png")
