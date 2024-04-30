@@ -78,8 +78,8 @@ class UNet(nn.Module):
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DIFFU_STEPS = 20
-BETA = torch.linspace(0.0001, 0.2, DIFFU_STEPS, device=DEVICE)
+DIFFU_STEPS = 200
+BETA = torch.linspace(1e-4, 2e-2, DIFFU_STEPS+1, device=DEVICE)
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
 SIGMA2 = BETA
@@ -87,7 +87,6 @@ SIGMA2 = BETA
 
 def q_xt_xt_1(xt_1, t):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
-    t_ind -= 1
     beta = BETA[t_ind]
     mean = torch.sqrt(1 - beta) * xt_1
     std = beta
@@ -96,7 +95,6 @@ def q_xt_xt_1(xt_1, t):
 
 def q_xt_x0(x0, t):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
-    t_ind -= 1
     alpha_bar = ALPHA_BAR[t_ind]
     mean = torch.sqrt(alpha_bar) * x0
     std = 1 - alpha_bar
@@ -105,11 +103,11 @@ def q_xt_x0(x0, t):
 
 def p_xt_1_xt(model, xt, t, vec):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
-    t_ind -= 1
     alpha_bar_t = ALPHA_BAR[t_ind]
     alpha_bar_t_1 = ALPHA_BAR[t_ind-1]
     alpha_t = ALPHA[t_ind]
     beta_t = BETA[t_ind]
+
     beta_tilde = (1 - alpha_bar_t_1) / (1 - alpha_bar_t) * beta_t
 
     epsilon_theta = model(xt, t, vec)
@@ -151,7 +149,7 @@ class MNISTDiffusionDataset(Dataset):
             xt.clone().detach().to(dtype=torch.float32, device=DEVICE),
             t.clone().detach().to(dtype=torch.float32, device=DEVICE),
             vec.clone().detach().to(dtype=torch.float32, device=DEVICE),
-            eps,
+            eps,  # y_true
         )
 
     def __len__(self):
@@ -196,49 +194,48 @@ model = UNet().to(DEVICE)
 model.load_state_dict(torch.load('model.pth'))
 
 # Define the optimizer.
-optimizer = torch.optim.Adam(model.parameters(), lr=3e-5)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 # Define the training dataset.
 train_dataset = MNISTDiffusionDataset(train=True)
 train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=0)
 trainer = Trainer()
 criterion = loss
-epochs = 5
+epochs = 10
 
-# Train the model.
-trainer.train(model, train_loader, epochs, optimizer, criterion)
+# # Train the model.
+# trainer.train(model, train_loader, epochs, optimizer, criterion)
 
-# Save the model.
-torch.save(model.state_dict(), "model.pth")
+# # Save the model.
+# torch.save(model.state_dict(), "model.pth")
 
 ##############
 # Evaluation #
 ##############
 
-x = torch.randn(1, 1, 28, 28).to(DEVICE)
-n = torch.randint(0, 10, (1, 1))
-vec = torch.nn.functional.one_hot(n, num_classes=10).to(device=DEVICE, dtype=torch.float32)
-img_vec = model.encodevec(vec)
-img_vec = F.relu(img_vec)
-img_vec = img_vec.view(-1, 1, 28, 28)
-img_vec = img_vec.cpu().detach().numpy()
-fig = plt.figure()
-plt.imshow(img_vec[0, 0], cmap="gray")
-plt.axis("off")
-plt.savefig("vec.tmp.png")
+nb_plots = 5
+ti_plots = np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)
+n_values = [i for i in range(10)]
 
-fig = plt.figure(figsize=(DIFFU_STEPS, 2))
-for ti in range(DIFFU_STEPS):
-    t = torch.tensor([[ti+1]], device=DEVICE, dtype=torch.float32)
-    eps_theta = model(x, t, vec)
-    x_theta = x - eps_theta
-    x = p_xt_1_xt(model, x, t, vec).sample()
-    ax = fig.add_subplot(2, DIFFU_STEPS, ti+1)
-    ax.imshow(x[0, 0].detach().cpu(), cmap="gray")
-    ax.axis("off")
-    ax = fig.add_subplot(2, DIFFU_STEPS, ti+1+DIFFU_STEPS)
-    ax.imshow(x_theta[0, 0].detach().cpu(), cmap="gray")
-    ax.axis("off")
+fig = plt.figure(figsize=(nb_plots, len(n_values)))
+
+for attempti, n in enumerate(n_values):
+    n = torch.tensor([[n]], device=DEVICE, dtype=torch.int64)
+    x = torch.randn(1, 1, 28, 28).to(DEVICE)
+    vec = torch.nn.functional.one_hot(n, num_classes=10).to(device=DEVICE, dtype=torch.float32)
+    img_vec = model.encodevec(vec)
+    img_vec = F.relu(img_vec)
+    img_vec = img_vec.view(-1, 1, 28, 28)
+    img_vec = img_vec.cpu().detach().numpy()
+
+    for ti in range(DIFFU_STEPS, 0, -1):
+        t = torch.tensor([[ti]], device=DEVICE, dtype=torch.float32)
+        x = p_xt_1_xt(model, x, t, vec).sample()
+        if ti in ti_plots:
+            ti_plotind = nb_plots - np.where(ti_plots == ti)[0][0]
+            ax = fig.add_subplot(len(n_values), nb_plots, ti_plotind + nb_plots * attempti) 
+            ax.imshow(x[0, 0].detach().cpu(), cmap="gray")
+            ax.axis("off")
+            ax.set_title(f"{ti}")
 fig.tight_layout()
-plt.title(f'{n.item()}')
 fig.savefig("diffused.tmp.png")
