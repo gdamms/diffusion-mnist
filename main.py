@@ -27,7 +27,7 @@ class UNet(nn.Module):
         ## Encoder for vec
         self.encodevec = nn.Linear(10, 28*28)
 
-        ## UNet
+        ## UNet (3 channels input because we concatenate xt, t and vec)
         self.conv1 = nn.Conv2d(3, 64, 3, padding=1)
         self.conv2 = nn.Conv2d(64, 64, 3, padding=1)
         self.maxpool1 = nn.MaxPool2d(2, 2)  # 28x28 -> 14x14
@@ -79,30 +79,73 @@ class UNet(nn.Module):
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 DIFFU_STEPS = 200
-BETA = torch.linspace(1e-4, 2e-2, DIFFU_STEPS+1, device=DEVICE)
+BETA = torch.linspace(1e-4, 2e-2, DIFFU_STEPS, device=DEVICE)
+BETA = torch.cat((torch.tensor([0.], device=DEVICE), BETA))
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
-SIGMA2 = BETA
+ALPHA_BAR_BAR = torch.cumsum(torch.sqrt(ALPHA_BAR), dim=0)
+
+plt.figure()
+plt.plot(BETA.cpu().detach().numpy(), label="beta")
+plt.plot(ALPHA.cpu().detach().numpy(), label="alpha")
+plt.plot(ALPHA_BAR.cpu().detach().numpy(), label="alpha_bar")
+# plt.plot(ALPHA_BAR_BAR.cpu().detach().numpy(), label="aplha_bar_bar")
+plt.plot(ALPHA_BAR_BAR.cpu().detach().numpy() * (1 - ALPHA).cpu().detach().numpy(), label="sigma_theta")
+plt.legend()
+plt.xlim(0, DIFFU_STEPS)
+# plt.ylim(0, 1)
+plt.savefig("beta_alpha.tmp.png")
 
 
 def q_xt_xt_1(xt_1, t):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
-    beta = BETA[t_ind]
-    mean = torch.sqrt(1 - beta) * xt_1
-    std = beta
-    return torch.distributions.Normal(mean, std)
+
+    alpha = ALPHA[t_ind]
+    mean = torch.sqrt(alpha) * xt_1
+    std = 1 - alpha
+    xt = torch.distributions.Normal(mean, std).sample()
+
+    print('xt_1 xt', xt_1.min(), xt_1.max(), xt.min(), xt.max())
+
+    return xt
+
+"""
+A = sqrt(alpha)
+B = 1 - alpha
+
+x1 = A * x0 + B * e
+x2 = A * x1 + B * e
+   = A * (A * x0 + B * e) + B * e
+   = A^2 * x0 + A * B * e + B * e
+   = A^2 * x0 + (A * B + B) * e
+   = A^2 * x0 + (A + 1) * B * e
+x3 = A * x2 + B * e
+   = A * (A^2 * x0 + (A * B + B) * e) + B * e
+   = A^3 * x0 + A * (A * B + B) * e + B * e
+   = A^3 * x0 + (A^2 * B + A * B + B) * e
+   = A^3 * x0 + (A^2 + A + 1) * B * e
+x4 = A * x3 + B * e
+   = A * (A^3 * x0 + (A^2 + A + 1) * B * e) + B * e
+   = A^4 * x0 + A * (A^2 + A + 1) * B * e + B * e
+   = A^4 * x0 + (A^3 * B + A^2 * B + A * B + B) * e
+   = A^4 * x0 + (A^3 + A^2 + A + 1) * B * e
+"""
 
 
 def q_xt_x0(x0, t):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
+
+    alpha = ALPHA[t_ind]
     alpha_bar = ALPHA_BAR[t_ind]
+    alpha_bar_bar = ALPHA_BAR_BAR[t_ind - 1]
     mean = torch.sqrt(alpha_bar) * x0
-    std = 1 - alpha_bar
-    return torch.distributions.Normal(mean, std)
+    std = alpha_bar_bar * (1 - alpha)
+    return torch.distributions.Normal(mean, std).sample()
 
 
 def p_xt_1_xt(model, xt, t, vec):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
+
     alpha_bar_t = ALPHA_BAR[t_ind]
     alpha_bar_t_1 = ALPHA_BAR[t_ind-1]
     alpha_t = ALPHA[t_ind]
@@ -112,11 +155,12 @@ def p_xt_1_xt(model, xt, t, vec):
 
     epsilon_theta = model(xt, t, vec)
 
-    # sigma_theta = torch.exp(nu * torch.log(beta_t) + (1 - nu) * torch.log(beta_tilde))
     sigma_theta = beta_tilde
     mu_theta = (xt - beta_t / torch.sqrt(1 - alpha_bar_t) * epsilon_theta) / torch.sqrt(alpha_t)
+    if sigma_theta.abs().max() <= 0:
+        return mu_theta
 
-    return torch.distributions.Normal(mu_theta, sigma_theta)
+    return torch.distributions.Normal(mu_theta, sigma_theta).sample()
 
 
 class MNISTDiffusionDataset(Dataset):
@@ -134,9 +178,12 @@ class MNISTDiffusionDataset(Dataset):
         img, label = self.mnist_data[index]
         img = img.to(DEVICE)
 
+        # Normalize the image between -0.5 and 0.5.
+        img = img - 0.5
+
         # Add noise to the image.
         t = torch.randint(1, DIFFU_STEPS, (1,), device=DEVICE)
-        xt = q_xt_x0(img, t).sample()
+        xt = q_xt_x0(img, t)
         eps = xt - img
 
         # Convert the label to a one-hot vector.
@@ -146,10 +193,12 @@ class MNISTDiffusionDataset(Dataset):
         )
 
         return (
+            # x_true
             xt.clone().detach().to(dtype=torch.float32, device=DEVICE),
             t.clone().detach().to(dtype=torch.float32, device=DEVICE),
             vec.clone().detach().to(dtype=torch.float32, device=DEVICE),
-            eps,  # y_true
+            # y_true
+            eps,
         )
 
     def __len__(self):
@@ -161,23 +210,38 @@ def loss(y_pred, y_true):
 
 
 
+def forward_diffusion(x0):
+    x = x0.clone()[0]
+    xs = [x.cpu().detach().numpy()]
+    for t in range(1, DIFFU_STEPS):
+        x = q_xt_xt_1(x, t)
+        xs.append(x.cpu().detach().numpy())
+    return xs
+
 mnist_data = datasets.MNIST(
     root="./data",
     train=True,
     download=True,
     transform=transforms.ToTensor(),
 )
-img, label = mnist_data[0]
-img = img.to(DEVICE)
+
+
+img, label = mnist_data[1]
+img = img.to(DEVICE) - 0.5
+
 fig = plt.figure(figsize=(DIFFU_STEPS, 2))
-for t in range(1, DIFFU_STEPS):
-    xt_1 = q_xt_x0(img, t - 1).sample()
-    x_t = q_xt_xt_1(xt_1, t).sample()
-    ax = fig.add_subplot(2, DIFFU_STEPS, t)
-    ax.imshow(xt_1[0].cpu(), cmap="gray")
+
+xs = forward_diffusion(img)
+for t, x in enumerate(xs):
+    ax = fig.add_subplot(2, DIFFU_STEPS, t+1)
+    ax.imshow(x, cmap="gray")
     ax.axis("off")
-    ax = fig.add_subplot(2, DIFFU_STEPS, DIFFU_STEPS + t)
-    ax.imshow(x_t[0].cpu(), cmap="gray")
+
+for t in range(1, DIFFU_STEPS):
+    x = q_xt_x0(img, t)[0].cpu()
+    print('x0', x.min(), x.max())
+    ax = fig.add_subplot(2, DIFFU_STEPS, DIFFU_STEPS + t + 1)
+    ax.imshow(x, cmap="gray")
     ax.axis("off")
 fig.tight_layout()
 fig.savefig("img.tmp.png")
@@ -230,7 +294,7 @@ for attempti, n in enumerate(n_values):
 
     for ti in range(DIFFU_STEPS, 0, -1):
         t = torch.tensor([[ti]], device=DEVICE, dtype=torch.float32)
-        x = p_xt_1_xt(model, x, t, vec).sample()
+        x = p_xt_1_xt(model, x, t, vec)
         if ti in ti_plots:
             ti_plotind = nb_plots - np.where(ti_plots == ti)[0][0]
             ax = fig.add_subplot(len(n_values), nb_plots, ti_plotind + nb_plots * attempti) 
