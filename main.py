@@ -295,7 +295,7 @@ if __name__ == '__main__':
 
         for ti in range(DIFFU_STEPS, 0, -1):
             t = torch.tensor([[ti]], device=DEVICE, dtype=torch.float32)
-            x = p_xt_1_xt(model, x, t, vec).sample()
+            x = p_xt_1_xt(model, x, t, vec)
             if ti in ti_plots:
                 ti_plotind = nb_plots - np.where(ti_plots == ti)[0][0]
                 ax = fig.add_subplot(len(n_values), nb_plots, ti_plotind + nb_plots * attempti) 
