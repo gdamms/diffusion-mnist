@@ -78,7 +78,7 @@ class UNet(nn.Module):
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DIFFU_STEPS = 200
+DIFFU_STEPS = 1000
 BETA = torch.linspace(1e-4, 2e-2, DIFFU_STEPS, device=DEVICE)
 BETA = torch.cat((torch.tensor([0.], device=DEVICE), BETA))
 ALPHA = 1 - BETA
@@ -108,28 +108,6 @@ def q_xt_xt_1(xt_1, t):
     print('xt_1 xt', xt_1.min(), xt_1.max(), xt.min(), xt.max())
 
     return xt
-
-"""
-A = sqrt(alpha)
-B = 1 - alpha
-
-x1 = A * x0 + B * e
-x2 = A * x1 + B * e
-   = A * (A * x0 + B * e) + B * e
-   = A^2 * x0 + A * B * e + B * e
-   = A^2 * x0 + (A * B + B) * e
-   = A^2 * x0 + (A + 1) * B * e
-x3 = A * x2 + B * e
-   = A * (A^2 * x0 + (A * B + B) * e) + B * e
-   = A^3 * x0 + A * (A * B + B) * e + B * e
-   = A^3 * x0 + (A^2 * B + A * B + B) * e
-   = A^3 * x0 + (A^2 + A + 1) * B * e
-x4 = A * x3 + B * e
-   = A * (A^3 * x0 + (A^2 + A + 1) * B * e) + B * e
-   = A^4 * x0 + A * (A^2 + A + 1) * B * e + B * e
-   = A^4 * x0 + (A^3 * B + A^2 * B + A * B + B) * e
-   = A^4 * x0 + (A^3 + A^2 + A + 1) * B * e
-"""
 
 
 def q_xt_x0(x0, t):
@@ -230,22 +208,32 @@ if __name__ == '__main__':
     img, label = mnist_data[1]
     img = img.to(DEVICE) - 0.5
 
-    fig = plt.figure(figsize=(DIFFU_STEPS, 2))
+    nb_plots = 10
+    plots_id = [i for i in np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)]
+
+    fig = plt.figure(figsize=(nb_plots, 2))
 
     xs = forward_diffusion(img)
     for t, x in enumerate(xs):
-        ax = fig.add_subplot(2, DIFFU_STEPS, t+1)
+        if t not in plots_id:
+            continue
+        plot_i = plots_id.index(t)
+        ax = fig.add_subplot(2, nb_plots, plot_i + 1)
         ax.imshow(x, cmap="gray")
         ax.axis("off")
 
     for t in range(1, DIFFU_STEPS):
         x = q_xt_x0(img, t)[0].cpu()
-        print('x0', x.min(), x.max())
-        ax = fig.add_subplot(2, DIFFU_STEPS, DIFFU_STEPS + t + 1)
+        # print('x0', x.min(), x.max())
+        if t not in plots_id:
+            continue
+        plot_i = plots_id.index(t)
+        ax = fig.add_subplot(2, nb_plots, nb_plots + plot_i + 1)
         ax.imshow(x, cmap="gray")
         ax.axis("off")
     fig.tight_layout()
     fig.savefig("img.tmp.png")
+    exit()
 
 
     ############
