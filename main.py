@@ -78,23 +78,16 @@ class UNet(nn.Module):
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DIFFU_STEPS = 1000
-BETA = torch.linspace(1e-4, 2e-2, DIFFU_STEPS, device=DEVICE)
+DIFFU_STEPS = 20
+BETA = torch.linspace(1e-2, 3e-1, DIFFU_STEPS, device=DEVICE)
 BETA = torch.cat((torch.tensor([0.], device=DEVICE), BETA))
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
-ALPHA_BAR_BAR = torch.cumsum(torch.sqrt(ALPHA_BAR), dim=0)
-
-plt.figure()
-plt.plot(BETA.cpu().detach().numpy(), label="beta")
-plt.plot(ALPHA.cpu().detach().numpy(), label="alpha")
-plt.plot(ALPHA_BAR.cpu().detach().numpy(), label="alpha_bar")
-# plt.plot(ALPHA_BAR_BAR.cpu().detach().numpy(), label="aplha_bar_bar")
-plt.plot(ALPHA_BAR_BAR.cpu().detach().numpy() * (1 - ALPHA).cpu().detach().numpy(), label="sigma_theta")
-plt.legend()
-plt.xlim(0, DIFFU_STEPS)
-# plt.ylim(0, 1)
-plt.savefig("beta_alpha.tmp.png")
+CUM_SQ_SUM = []
+for t in range(len(ALPHA)):
+    cum_sq_sum = sum([torch.prod(ALPHA[s+2:t+1]) * (1 - ALPHA[s+1])**2 for s in range(t)])
+    CUM_SQ_SUM.append(cum_sq_sum)
+CUM_SQ_SUM = torch.tensor(CUM_SQ_SUM, device=DEVICE)
 
 
 def q_xt_xt_1(xt_1, t):
@@ -105,19 +98,26 @@ def q_xt_xt_1(xt_1, t):
     std = 1 - alpha
     xt = torch.distributions.Normal(mean, std).sample()
 
-    print('xt_1 xt', xt_1.min(), xt_1.max(), xt.min(), xt.max())
-
     return xt
 
+# def q_xt_x0(x0, t):
+#     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
+
+#     alpha = ALPHA[t_ind]
+#     alpha_bar = ALPHA_BAR[t_ind]
+#     alpha_bar_bar = ALPHA_BAR_BAR[t_ind - 1]
+#     mean = torch.sqrt(alpha_bar) * x0
+#     std = alpha_bar_bar * (1 - alpha)
+#     return torch.distributions.Normal(mean, std).sample()
 
 def q_xt_x0(x0, t):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
 
-    alpha = ALPHA[t_ind]
     alpha_bar = ALPHA_BAR[t_ind]
-    alpha_bar_bar = ALPHA_BAR_BAR[t_ind - 1]
+    cum_sq_sum = CUM_SQ_SUM[t_ind]
+
     mean = torch.sqrt(alpha_bar) * x0
-    std = alpha_bar_bar * (1 - alpha)
+    std = torch.sqrt(cum_sq_sum)
     return torch.distributions.Normal(mean, std).sample()
 
 
@@ -190,7 +190,7 @@ def loss(y_pred, y_true):
 def forward_diffusion(x0):
     x = x0.clone()[0]
     xs = [x.cpu().detach().numpy()]
-    for t in range(1, DIFFU_STEPS):
+    for t in range(1, DIFFU_STEPS+1):
         x = q_xt_xt_1(x, t)
         xs.append(x.cpu().detach().numpy())
     return xs
@@ -222,9 +222,8 @@ if __name__ == '__main__':
         ax.imshow(x, cmap="gray")
         ax.axis("off")
 
-    for t in range(1, DIFFU_STEPS):
+    for t in range(1, DIFFU_STEPS+1):
         x = q_xt_x0(img, t)[0].cpu()
-        # print('x0', x.min(), x.max())
         if t not in plots_id:
             continue
         plot_i = plots_id.index(t)
@@ -233,8 +232,6 @@ if __name__ == '__main__':
         ax.axis("off")
     fig.tight_layout()
     fig.savefig("img.tmp.png")
-    exit()
-
 
     ############
     # Training #
@@ -251,22 +248,23 @@ if __name__ == '__main__':
 
     # Define the trainiself.encodevec = nn.Linear(10, 28*28)ng dataset.
     train_dataset = MNISTDiffusionDataset(train=True)
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True,
+                              num_workers=4, persistent_workers=True)
     trainer = Trainer()
     criterion = loss
-    epochs = 30
+    epochs = 1
 
-    # # Train the model.
-    # trainer.train(model, train_loader, epochs, optimizer, criterion)
+    # Train the model.
+    trainer.train(model, train_loader, epochs, optimizer, criterion)
 
-    # # Save the model.
-    # torch.save(model.state_dict(), "model.pth")
+    # Save the model.
+    torch.save(model.state_dict(), "model.pth")
 
     ############## 
     # Evaluation #
     ##############
 
-    nb_plots = 5
+    nb_plots = 10
     ti_plots = np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)
     n_values = [i for i in range(10)]
 
