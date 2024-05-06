@@ -78,16 +78,11 @@ class UNet(nn.Module):
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DIFFU_STEPS = 20
-BETA = torch.linspace(1e-2, 3e-1, DIFFU_STEPS, device=DEVICE)
+DIFFU_STEPS = 300
+BETA = torch.linspace(1e-4, 2e-2, DIFFU_STEPS, device=DEVICE)
 BETA = torch.cat((torch.tensor([0.], device=DEVICE), BETA))
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
-CUM_SQ_SUM = []
-for t in range(len(ALPHA)):
-    cum_sq_sum = sum([torch.prod(ALPHA[s+2:t+1]) * (1 - ALPHA[s+1])**2 for s in range(t)])
-    CUM_SQ_SUM.append(cum_sq_sum)
-CUM_SQ_SUM = torch.tensor(CUM_SQ_SUM, device=DEVICE)
 
 
 def q_xt_xt_1(xt_1, t):
@@ -95,29 +90,17 @@ def q_xt_xt_1(xt_1, t):
 
     alpha = ALPHA[t_ind]
     mean = torch.sqrt(alpha) * xt_1
-    std = 1 - alpha
+    std = torch.sqrt(1 - alpha)
     xt = torch.distributions.Normal(mean, std).sample()
 
     return xt
-
-# def q_xt_x0(x0, t):
-#     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
-
-#     alpha = ALPHA[t_ind]
-#     alpha_bar = ALPHA_BAR[t_ind]
-#     alpha_bar_bar = ALPHA_BAR_BAR[t_ind - 1]
-#     mean = torch.sqrt(alpha_bar) * x0
-#     std = alpha_bar_bar * (1 - alpha)
-#     return torch.distributions.Normal(mean, std).sample()
 
 def q_xt_x0(x0, t):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
 
     alpha_bar = ALPHA_BAR[t_ind]
-    cum_sq_sum = CUM_SQ_SUM[t_ind]
-
     mean = torch.sqrt(alpha_bar) * x0
-    std = torch.sqrt(cum_sq_sum)
+    std = torch.sqrt(1 - alpha_bar)
     return torch.distributions.Normal(mean, std).sample()
 
 
@@ -156,8 +139,8 @@ class MNISTDiffusionDataset(Dataset):
         img, label = self.mnist_data[index]
         img = img.to(DEVICE)
 
-        # Normalize the image between -0.5 and 0.5.
-        img = img - 0.5
+        # Normalize the image.
+        img = img * 2 - 1
 
         # Add noise to the image.
         t = torch.randint(1, DIFFU_STEPS, (1,), device=DEVICE)
@@ -204,9 +187,8 @@ if __name__ == '__main__':
         transform=transforms.ToTensor(),
     )
 
-
     img, label = mnist_data[1]
-    img = img.to(DEVICE) - 0.5
+    img = img.to(DEVICE) * 2 - 1
 
     nb_plots = 10
     plots_id = [i for i in np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)]
@@ -244,7 +226,7 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load('model.pth'))
 
     # Define the optimizer.
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
 
     # Define the trainiself.encodevec = nn.Linear(10, 28*28)ng dataset.
     train_dataset = MNISTDiffusionDataset(train=True)
@@ -252,7 +234,7 @@ if __name__ == '__main__':
                               num_workers=4, persistent_workers=True)
     trainer = Trainer()
     criterion = loss
-    epochs = 1
+    epochs = 10
 
     # Train the model.
     trainer.train(model, train_loader, epochs, optimizer, criterion)
