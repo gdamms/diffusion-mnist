@@ -107,10 +107,10 @@ def q_xt_x0(x0, t):
 def p_xt_1_xt(model, xt, t, vec):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
 
-    alpha_bar_t = ALPHA_BAR[t_ind]
-    alpha_bar_t_1 = ALPHA_BAR[t_ind-1]
-    alpha_t = ALPHA[t_ind]
-    beta_t = BETA[t_ind]
+    alpha_bar_t = ALPHA_BAR[t_ind].view(-1, 1, 1, 1)
+    alpha_bar_t_1 = ALPHA_BAR[t_ind-1].view(-1, 1, 1, 1)
+    alpha_t = ALPHA[t_ind].view(-1, 1, 1, 1)
+    beta_t = BETA[t_ind].view(-1, 1, 1, 1)
 
     beta_tilde = (1 - alpha_bar_t_1) / (1 - alpha_bar_t) * beta_t
 
@@ -187,33 +187,40 @@ if __name__ == '__main__':
         transform=transforms.ToTensor(),
     )
 
-    img, label = mnist_data[1]
+    #############
+    # Diffusion #
+    #############
+    img, label = mnist_data[np.random.randint(0, len(mnist_data))]
     img = img.to(DEVICE) * 2 - 1
 
     nb_plots = 10
     plots_id = [i for i in np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)]
 
-    fig = plt.figure(figsize=(nb_plots, 2))
-
     xs = forward_diffusion(img)
+
+    plt.figure(figsize=(nb_plots, 2))
     for t, x in enumerate(xs):
         if t not in plots_id:
             continue
         plot_i = plots_id.index(t)
-        ax = fig.add_subplot(2, nb_plots, plot_i + 1)
-        ax.imshow(x, cmap="gray")
-        ax.axis("off")
+        plt.subplot(2, nb_plots, plot_i + 1)
+        plt.title(f"t={t}")
+        plt.imshow(x, cmap="gray")
+        plt.axis("off")
 
     for t in range(1, DIFFU_STEPS+1):
         x = q_xt_x0(img, t)[0].cpu()
         if t not in plots_id:
             continue
         plot_i = plots_id.index(t)
-        ax = fig.add_subplot(2, nb_plots, nb_plots + plot_i + 1)
-        ax.imshow(x, cmap="gray")
-        ax.axis("off")
-    fig.tight_layout()
-    fig.savefig("img.tmp.png")
+        plt.subplot(2, nb_plots, nb_plots + plot_i + 1)
+        plt.imshow(x, cmap="gray")
+        plt.axis("off")
+
+    plt.suptitle("Forward diffusion")
+    plt.tight_layout()
+    plt.savefig("forward_diffusion.tmp.png")
+    exit()
 
     ############
     # Training #
@@ -228,19 +235,19 @@ if __name__ == '__main__':
     # Define the optimizer.
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
 
-    # Define the trainiself.encodevec = nn.Linear(10, 28*28)ng dataset.
+    # Define the training dataset.
     train_dataset = MNISTDiffusionDataset(train=True)
     train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True,
                               num_workers=4, persistent_workers=True)
     trainer = Trainer()
     criterion = loss
-    epochs = 10
+    epochs = 1
 
-    # Train the model.
-    trainer.train(model, train_loader, epochs, optimizer, criterion)
+    # # Train the model.
+    # trainer.train(model, train_loader, epochs, optimizer, criterion)
 
-    # Save the model.
-    torch.save(model.state_dict(), "model.pth")
+    # # Save the model.
+    # torch.save(model.state_dict(), 'model.pth')
 
     ############## 
     # Evaluation #
@@ -272,3 +279,20 @@ if __name__ == '__main__':
                 ax.set_title(f"{ti}")
     fig.tight_layout()
     fig.savefig("diffused.tmp.png")
+
+    x = torch.randn(nb_plots * 10, 1, 28, 28).to(DEVICE)
+    values = sum([[[i]] * nb_plots for i in range(10)], [])
+    vec = torch.nn.functional.one_hot(torch.tensor(values, device=DEVICE, dtype=torch.int64), num_classes=10).to(device=DEVICE, dtype=torch.float32)
+
+    for ti in range(DIFFU_STEPS, 0, -1):
+        t = torch.tensor([[ti]] * 10 * nb_plots, device=DEVICE, dtype=torch.float32)
+        x = p_xt_1_xt(model, x, t, vec)
+
+    fig = plt.figure(figsize=(nb_plots, len(n_values)))
+    for i in range(nb_plots):
+        for j in range(10):
+            ax = fig.add_subplot(10, nb_plots, i + nb_plots * j + 1)
+            ax.imshow(x[0, 0].detach().cpu(), cmap="gray")
+            ax.axis("off")
+    fig.tight_layout()
+    fig.savefig("diffused_all.tmp.png")
