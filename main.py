@@ -17,18 +17,18 @@ class UNet(nn.Module):
         super().__init__()
 
         ## Inputs:
-        # xt: image at step t (1x28x28)
+        # xt: image at step t (NB_CHANNEL*IMG_SIZE*IMG_SIZE)
         # t: step number (1)
-        # vec: one-hot vector of the label (10)
+        # vec: one-hot vector of the label (NB_LABEL)
 
         ## Encoder for t
-        self.encodet = nn.Linear(1, 28*28)
+        self.encodet = nn.Linear(1, IMG_SIZE*IMG_SIZE)
 
         ## Encoder for vec
-        self.encodevec = nn.Linear(10, 28*28)
+        self.encodevec = nn.Linear(NB_LABEL, IMG_SIZE*IMG_SIZE)
 
-        ## UNet (3 channels input because we concatenate xt, t and vec)
-        self.conv1 = nn.Conv2d(3, 64, 3, padding=1)
+        ## UNet (2 more channels input because we concatenate xt with t and vec)
+        self.conv1 = nn.Conv2d(NB_CHANNEL+2, 64, 3, padding=1)
         self.conv2 = nn.Conv2d(64, 64, 3, padding=1)
         self.maxpool1 = nn.MaxPool2d(2, 2)  # 28x28 -> 14x14
         self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
@@ -42,14 +42,14 @@ class UNet(nn.Module):
         self.upconv2 = nn.ConvTranspose2d(128, 64, 2, stride=2) # 14x14 -> 28x28
         self.conv9 = nn.Conv2d(128, 64, 3, padding=1)
         self.conv10 = nn.Conv2d(64, 64, 3, padding=1)
-        self.conv11 = nn.Conv2d(64, 1, 3, padding=1)
+        self.conv11 = nn.Conv2d(64, NB_CHANNEL, 3, padding=1)
 
     def forward(self, xt, t, vec):
         # Encode t and vec
         t = F.relu(self.encodet(t))
-        t = t.view(-1, 1, 28, 28)
+        t = t.view(-1, 1, IMG_SIZE, IMG_SIZE)
         vec = F.relu(self.encodevec(vec))
-        vec = vec.view(-1, 1, 28, 28)
+        vec = vec.view(-1, 1, IMG_SIZE, IMG_SIZE)
 
         # Concat all 3
         x = torch.cat((xt, t, vec), dim=1)
@@ -84,6 +84,25 @@ BETA = torch.cat((torch.tensor([0.], device=DEVICE), BETA))
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
 
+
+dataset = datasets.MNIST(
+    root="./data",
+    train=True,
+    download=True,
+    transform=transforms.ToTensor(),
+)
+dataset = datasets.LFWPeople(
+    root="./data",
+    download=True,
+    transform=transforms.Compose([
+        transforms.Resize((64, 64)),
+        transforms.ToTensor(),
+    ]),
+)
+
+img = dataset[0][0]
+NB_CHANNEL, IMG_SIZE, _ = img.shape
+NB_LABEL = 1
 
 def q_xt_xt_1(xt_1, t):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
@@ -124,19 +143,14 @@ def p_xt_1_xt(model, xt, t, vec):
     return torch.distributions.Normal(mu_theta, sigma_theta).sample()
 
 
-class MNISTDiffusionDataset(Dataset):
-    def __init__(self, train=True):
+class DiffusionDataset(Dataset):
+    def __init__(self, dataset):
         super().__init__()
-        self.mnist_data = datasets.MNIST(
-            root="./data",
-            train=train,
-            download=True,
-            transform=transforms.ToTensor(),
-        )
+        self.dataset = dataset
 
     def __getitem__(self, index):
         # Get the image and the label.
-        img, label = self.mnist_data[index]
+        img, label = self.dataset[index]
         img = img.to(DEVICE)
 
         # Normalize the image.
@@ -149,8 +163,8 @@ class MNISTDiffusionDataset(Dataset):
 
         # Convert the label to a one-hot vector.
         vec = torch.nn.functional.one_hot(
-            torch.tensor(label),
-            num_classes=10,
+            torch.tensor(min(label, NB_LABEL-1)),
+            num_classes=NB_LABEL,
         )
 
         return (
@@ -163,7 +177,7 @@ class MNISTDiffusionDataset(Dataset):
         )
 
     def __len__(self):
-        return len(self.mnist_data)
+        return len(self.dataset)
 
 
 def loss(y_pred, y_true):
@@ -171,21 +185,23 @@ def loss(y_pred, y_true):
 
 
 def forward_diffusion(x0):
-    x = x0.clone()[0]
-    xs = [x.cpu().detach().numpy()]
+    x = x0.clone()
+    xs = [x.cpu()]
     for t in range(1, DIFFU_STEPS+1):
         x = q_xt_xt_1(x, t)
-        xs.append(x.cpu().detach().numpy())
+        xs.append(x.cpu())
     return xs
 
 
+def tensor_to_image(tensor):
+    img = tensor.clone().detach().cpu().numpy().transpose(1, 2, 0)
+    img = img / 2 + 0.5
+    img -= img.min()
+    img /= img.max()
+    return img
+
+
 if __name__ == '__main__':
-    mnist_data = datasets.MNIST(
-        root="./data",
-        train=True,
-        download=True,
-        transform=transforms.ToTensor(),
-    )
     ############
     # Training #
     ############
@@ -204,12 +220,12 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
 
     # Define the training dataset.
-    train_dataset = MNISTDiffusionDataset(train=True)
+    train_dataset = DiffusionDataset(dataset)
     train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True,
                               num_workers=4, persistent_workers=True)
     trainer = Trainer()
     criterion = loss
-    epochs = 0
+    epochs = 30
 
     # Train the model.
     trainer.train(model, train_loader, epochs, optimizer, criterion)
@@ -222,7 +238,7 @@ if __name__ == '__main__':
     ##############
 
     # Forward diffusion
-    img, label = mnist_data[np.random.randint(0, len(mnist_data))]
+    img, label = dataset[np.random.randint(0, len(dataset))]
     img = img.to(DEVICE) * 2 - 1
 
     nb_plots = 6
@@ -237,16 +253,16 @@ if __name__ == '__main__':
         plot_i = plots_id.index(t)
         plt.subplot(2, nb_plots + 1, plot_i + 2)
         plt.title(f"t={t}")
-        plt.imshow(x, cmap="gray")
+        plt.imshow(tensor_to_image(x))
         plt.axis("off")
 
     for t in range(1, DIFFU_STEPS+1):
-        x = q_xt_x0(img, t)[0].cpu()
+        x = q_xt_x0(img, t).cpu()
         if t not in plots_id:
             continue
         plot_i = plots_id.index(t)
         plt.subplot(2, nb_plots + 1, nb_plots + plot_i + 3)
-        plt.imshow(x, cmap="gray")
+        plt.imshow(tensor_to_image(x))
         plt.axis("off")
 
     plt.subplot(2, nb_plots + 1, 1)
@@ -267,9 +283,9 @@ if __name__ == '__main__':
 
     n_classes = 10
 
-    x = torch.randn(n_classes, 1, 28, 28,device=DEVICE)
-    vec = torch.tensor([[i] for i in range(n_classes)], dtype=torch.int64)
-    vec = torch.nn.functional.one_hot(vec, num_classes=10).to(device=DEVICE, dtype=torch.float32)
+    x = torch.randn(n_classes, NB_CHANNEL, IMG_SIZE, IMG_SIZE, device=DEVICE)
+    vec = torch.tensor([[min(i, NB_LABEL-1)] for i in range(n_classes)], dtype=torch.int64)
+    vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
 
     plt.figure(figsize=(nb_plots, n_classes))
     plt.suptitle("Backward diffusion")
@@ -282,17 +298,17 @@ if __name__ == '__main__':
                 plt.subplot(n_classes, nb_plots, t_plot_i + nb_plots * class_i + 1)
                 if class_i == 0:
                     plt.title(f"t={t}")
-                plt.imshow(x[class_i, 0].detach().cpu(), cmap="gray")
+                plt.imshow(tensor_to_image(x[class_i]))
                 plt.axis("off")
     plt.tight_layout()
     plt.savefig("backward_diffusion.tmp.png")
 
 
     # Benchmark
-    x = torch.randn(nb_plots * n_classes, 1, 28, 28).to(DEVICE)
-    vec = sum([[[i]] * nb_plots for i in range(n_classes)], [])
+    x = torch.randn(nb_plots * n_classes, NB_CHANNEL, IMG_SIZE, IMG_SIZE).to(DEVICE)
+    vec = sum([[[min(i, NB_LABEL-1)]] * nb_plots for i in range(n_classes)], [])
     vec = torch.tensor(vec, device=DEVICE, dtype=torch.int64)
-    vec = torch.nn.functional.one_hot(vec, num_classes=10).to(device=DEVICE, dtype=torch.float32)
+    vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
 
     for ti in range(DIFFU_STEPS, 0, -1):
         t = torch.tensor([[ti]] * n_classes * nb_plots, device=DEVICE, dtype=torch.float32)
@@ -303,9 +319,9 @@ if __name__ == '__main__':
         for j in range(n_classes):
             id = i * n_classes + j
             plt.subplot(n_classes, nb_plots, id + 1)
-            plt.imshow(x[id, 0].detach().cpu(), cmap="gray")
+            plt.imshow(tensor_to_image(x[id]))
             plt.axis("off")
     plt.tight_layout()
     plt.savefig("benchmark.tmp.png")
 
-    plt.show()
+    # plt.show()
