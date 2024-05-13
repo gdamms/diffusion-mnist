@@ -8,6 +8,8 @@ from torchvision import datasets, transforms
 import matplotlib.pyplot as plt
 
 import numpy as np
+import os
+import cv2
 
 from trainer import Trainer
 
@@ -76,6 +78,22 @@ class UNet(nn.Module):
         return x5
 
 
+class LFWcrop(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.path = './data/lfwcrop_color/faces'
+        self.files = os.listdir(self.path)
+
+    def __getitem__(self, index):
+        img = cv2.imread(os.path.join(self.path, self.files[index]))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = np.transpose(img, (2, 0, 1)) / 255
+        return torch.tensor(img, dtype=torch.float32), 0
+
+    def __len__(self):
+        return len(self.files)
+
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 DIFFU_STEPS = 300
@@ -99,6 +117,7 @@ dataset = datasets.LFWPeople(
         transforms.ToTensor(),
     ]),
 )
+dataset = LFWcrop()
 
 img = dataset[0][0]
 NB_CHANNEL, IMG_SIZE, _ = img.shape
