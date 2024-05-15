@@ -38,19 +38,13 @@ class UNet(nn.Module):
         self.maxpool2 = nn.MaxPool2d(2, 2)
         self.conv5 = nn.Conv2d(128, 256, 3, padding=1)
         self.conv6 = nn.Conv2d(256, 256, 3, padding=1)
-        self.maxpool3 = nn.MaxPool2d(2, 2)
-        self.conv7 = nn.Conv2d(256, 512, 3, padding=1)
-        self.conv8 = nn.Conv2d(512, 512, 3, padding=1)
-        self.upconv1 = nn.ConvTranspose2d(512, 256, 2, stride=2)
-        self.conv9 = nn.Conv2d(512, 256, 3, padding=1)
-        self.conv10 = nn.Conv2d(256, 256, 3, padding=1)
-        self.upconv2 = nn.ConvTranspose2d(256, 128, 2, stride=2)
-        self.conv11 = nn.Conv2d(256, 128, 3, padding=1)
-        self.conv12 = nn.Conv2d(128, 128, 3, padding=1)
-        self.upconv3 = nn.ConvTranspose2d(128, 64, 2, stride=2)
-        self.conv13 = nn.Conv2d(128, 64, 3, padding=1)
-        self.conv14 = nn.Conv2d(64, 64, 3, padding=1)
-        self.conv15 = nn.Conv2d(64, NB_CHANNEL, 3, padding=1)
+        self.upconv1 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.conv7 = nn.Conv2d(256, 128, 3, padding=1)
+        self.conv8 = nn.Conv2d(128, 128, 3, padding=1)
+        self.upconv2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.conv9 = nn.Conv2d(128, 64, 3, padding=1)
+        self.conv10 = nn.Conv2d(64, 64, 3, padding=1)
+        self.conv11 = nn.Conv2d(64, NB_CHANNEL, 3, padding=1)
 
     def forward(self, xt, t, vec):
         # Encode t and vec
@@ -70,23 +64,16 @@ class UNet(nn.Module):
         x2 = F.relu(self.conv4(x2))
         x3 = self.maxpool2(x2)
         x3 = F.relu(self.conv5(x3))
-        x3 = F.relu(self.conv6(x3))
-        x4 = self.maxpool3(x3)
-        x4 = F.relu(self.conv7(x4))
-        x4 = F.relu(self.conv8(x4))
-        x5 = self.upconv1(x4)
-        x5 = torch.cat((x5, x3), dim=1)
-        x5 = F.relu(self.conv9(x5))
-        x5 = F.relu(self.conv10(x5))
-        x6 = self.upconv2(x5)
+        x5 = F.relu(self.conv6(x3))
+        x6 = self.upconv1(x5)
         x6 = torch.cat((x6, x2), dim=1)
-        x6 = F.relu(self.conv11(x6))
-        x6 = F.relu(self.conv12(x6))
-        x7 = self.upconv3(x6)
+        x6 = F.relu(self.conv7(x6))
+        x6 = F.relu(self.conv8(x6))
+        x7 = self.upconv2(x6)
         x7 = torch.cat((x7, x1), dim=1)
-        x7 = F.relu(self.conv13(x7))
-        x7 = F.relu(self.conv14(x7))
-        x7 = self.conv15(x7)
+        x7 = F.relu(self.conv9(x7))
+        x7 = F.relu(self.conv10(x7))
+        x7 = self.conv11(x7)
 
         return x7
 
@@ -109,19 +96,19 @@ class LFWcrop(Dataset):
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DIFFU_STEPS = 1000
+DIFFU_STEPS = 300
 BETA = torch.linspace(1e-4, 2e-2, DIFFU_STEPS, device=DEVICE)
 BETA = torch.cat((torch.tensor([0.], device=DEVICE), BETA))
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
 
 
-# dataset = datasets.MNIST(
-#     root="./data",
-#     train=True,
-#     download=True,
-#     transform=transforms.ToTensor(),
-# )
+dataset = datasets.MNIST(
+    root="./data",
+    train=True,
+    download=True,
+    transform=transforms.ToTensor(),
+)
 # dataset = datasets.LFWPeople(
 #     root="./data",
 #     download=True,
@@ -130,11 +117,11 @@ ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
 #         transforms.ToTensor(),
 #     ]),
 # )
-dataset = LFWcrop()
+# dataset = LFWcrop()
 
 img = dataset[0][0]
 NB_CHANNEL, IMG_SIZE, _ = img.shape
-NB_LABEL = 1
+NB_LABEL = 10
 
 def q_xt_xt_1(xt_1, t):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
@@ -154,7 +141,6 @@ def q_xt_x0(x0, t):
     std = torch.sqrt(1 - alpha_bar)
     return torch.distributions.Normal(mean, std).sample()
 
-
 def p_xt_1_xt(model, xt, t, vec):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
 
@@ -167,12 +153,13 @@ def p_xt_1_xt(model, xt, t, vec):
 
     epsilon_theta = model(xt, t, vec)
 
-    sigma_theta = beta_tilde
-    mu_theta = (xt - beta_t / torch.sqrt(1 - alpha_bar_t) * epsilon_theta) / torch.sqrt(alpha_t)
-    if sigma_theta.abs().max() <= 0:
-        return mu_theta
+    mask_t0 = (t > 1).to(dtype=torch.float32).view(-1, 1, 1, 1)
+    sigma_theta = torch.sqrt(beta_t)  # torch.sqrt(beta_tilde)
+    mu_theta = (xt - (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t) * epsilon_theta) / torch.sqrt(alpha_t)
 
-    return torch.distributions.Normal(mu_theta, torch.sqrt(sigma_theta)).sample()
+    noise = torch.randn_like(mu_theta) * mask_t0
+
+    return mu_theta + sigma_theta * noise
 
 
 class DiffusionDataset(Dataset):
@@ -257,7 +244,7 @@ if __name__ == '__main__':
                               num_workers=4, persistent_workers=True)
     trainer = Trainer()
     criterion = loss
-    epochs = 100
+    epochs = 0
 
     # Train the model.
     trainer.train(model, train_loader, epochs, optimizer, criterion)
@@ -310,7 +297,6 @@ if __name__ == '__main__':
 
 
     # Backward diffusion
-    nb_plots = 6
     t_plots = np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)
 
     n_classes = 10
