@@ -4,8 +4,8 @@ data/
 # Model weights.
 *.pth
 
-# Tmp pngs.
-*.tmp.png
+# Tmp files.
+*.tmp.*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
