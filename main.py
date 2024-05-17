@@ -191,7 +191,6 @@ def forward_diffusion(x0):
 
 def tensor_to_image(tensor):
     img = tensor.clone().detach().cpu().numpy().transpose(1, 2, 0)
-    img = img / 2 + 0.5
     img -= img.min()
     img /= img.max()
     return img
@@ -205,12 +204,12 @@ BETA = torch.cat((torch.tensor([0.], device=DEVICE), BETA))
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
 
-# dataset = datasets.MNIST(
-#     root="./data",
-#     train=True,
-#     download=True,
-#     transform=transforms.ToTensor(),
-# )
+dataset = datasets.MNIST(
+    root="./data",
+    train=True,
+    download=True,
+    transform=transforms.ToTensor(),
+)
 # dataset = datasets.LFWPeople(
 #     root="./data",
 #     download=True,
@@ -219,13 +218,13 @@ ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
 #         transforms.ToTensor(),
 #     ]),
 # )
-dataset = LFWcrop()
+# dataset = LFWcrop()
 
 img = dataset[0][0]
 NB_CHANNEL, IMG_SIZE, _ = img.shape
-NB_LABEL = 1
+NB_LABEL = 10
 
-EPOCHS = 100
+EPOCHS = 10
 LEARNING_RATE = 2e-4
 
 
@@ -343,6 +342,9 @@ if __name__ == '__main__':
         for ti in range(DIFFU_STEPS, 0, -1):
             t = torch.tensor([[ti]] * n_classes * nb_plots, device=DEVICE, dtype=torch.float32)
             x = p_xt_1_xt(model, x, t, vec)
+
+        x = x * 0.5 + 0.5
+        x = x.clamp(0, 1)
 
         plt.figure(figsize=(nb_plots, n_classes))
         for i in range(nb_plots):
