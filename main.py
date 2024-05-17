@@ -86,6 +86,7 @@ class LFWcrop(Dataset):
 
     def __getitem__(self, index):
         img = cv2.imread(os.path.join(self.path, self.files[index]))
+        img = cv2.resize(img, (32, 32))
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = np.transpose(img, (2, 0, 1)) / 255
         return torch.tensor(img, dtype=torch.float32), 0
@@ -100,9 +101,11 @@ def q_xt_xt_1(xt_1, t):
     alpha = ALPHA[t_ind]
     mean = torch.sqrt(alpha) * xt_1
     std = torch.sqrt(1 - alpha)
-    xt = torch.distributions.Normal(mean, std).sample()
 
-    return xt
+    eps = torch.randn(xt_1.shape, device=DEVICE)
+    xt = mean + std * eps
+
+    return xt, eps
 
 def q_xt_x0(x0, t):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
@@ -110,7 +113,11 @@ def q_xt_x0(x0, t):
     alpha_bar = ALPHA_BAR[t_ind]
     mean = torch.sqrt(alpha_bar) * x0
     std = torch.sqrt(1 - alpha_bar)
-    return torch.distributions.Normal(mean, std).sample()
+
+    eps = torch.randn(x0.shape, device=DEVICE)
+    xt = mean + std * eps
+
+    return xt, eps
 
 def p_xt_1_xt(model, xt, t, vec):
     t_ind = t.to(dtype=torch.long) if isinstance(t, torch.Tensor) else t
@@ -124,7 +131,7 @@ def p_xt_1_xt(model, xt, t, vec):
 
     epsilon_theta = model(xt, t, vec)
 
-    sigma_theta = torch.sqrt(beta_t)  # torch.sqrt(beta_tilde)
+    sigma_theta = torch.sqrt(beta_tilde)
     mu_theta = (xt - (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t) * epsilon_theta) / torch.sqrt(alpha_t)
 
     mask_t0 = (t > 1).to(dtype=torch.float32).view(-1, 1, 1, 1)
@@ -148,8 +155,7 @@ class DiffusionDataset(Dataset):
 
         # Add noise to the image.
         t = torch.randint(1, DIFFU_STEPS, (1,), device=DEVICE)
-        xt = q_xt_x0(img, t)
-        eps = xt - img
+        xt, eps = q_xt_x0(img, t)
 
         # Convert the label to a one-hot vector.
         vec = torch.nn.functional.one_hot(
@@ -178,7 +184,7 @@ def forward_diffusion(x0):
     x = x0.clone()
     xs = [x.cpu()]
     for t in range(1, DIFFU_STEPS+1):
-        x = q_xt_xt_1(x, t)
+        x = q_xt_xt_1(x, t)[0]
         xs.append(x.cpu())
     return xs
 
@@ -193,18 +199,18 @@ def tensor_to_image(tensor):
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DIFFU_STEPS = 300
+DIFFU_STEPS = 1000
 BETA = torch.linspace(1e-4, 2e-2, DIFFU_STEPS, device=DEVICE)
 BETA = torch.cat((torch.tensor([0.], device=DEVICE), BETA))
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
 
-dataset = datasets.MNIST(
-    root="./data",
-    train=True,
-    download=True,
-    transform=transforms.ToTensor(),
-)
+# dataset = datasets.MNIST(
+#     root="./data",
+#     train=True,
+#     download=True,
+#     transform=transforms.ToTensor(),
+# )
 # dataset = datasets.LFWPeople(
 #     root="./data",
 #     download=True,
@@ -213,13 +219,13 @@ dataset = datasets.MNIST(
 #         transforms.ToTensor(),
 #     ]),
 # )
-# dataset = LFWcrop()
+dataset = LFWcrop()
 
 img = dataset[0][0]
 NB_CHANNEL, IMG_SIZE, _ = img.shape
-NB_LABEL = 10
+NB_LABEL = 1
 
-EPOCHS = 1
+EPOCHS = 100
 LEARNING_RATE = 2e-4
 
 
@@ -282,7 +288,7 @@ if __name__ == '__main__':
             plt.axis("off")
 
         for t in range(1, DIFFU_STEPS+1):
-            x = q_xt_x0(img, t).cpu()
+            x = q_xt_x0(img, t)[0].cpu()
             if t not in plots_id:
                 continue
             plot_i = plots_id.index(t)
