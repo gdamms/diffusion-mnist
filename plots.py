@@ -36,8 +36,8 @@ plt.savefig('plots/alpha_beta.tmp.png')
 
 
 mnist = datasets.MNIST('data', train=True, download=True)
-img = mnist.data[np.random.randint(0, len(mnist))].numpy() / 255
-img = img * 2 - 1
+img, label = mnist[np.random.randint(0, len(mnist))]
+img = np.array(img) / 255 * 2 - 1
 
 plt.figure()
 plt.imshow(img, cmap='gray')
@@ -90,7 +90,7 @@ for t in track(range(1, DIFFU_STEPS+1)):
     ax2.set_title(f'xt histogram')
 
     fig.savefig(f'plots/diffusion/{t:04d}.tmp.png')
-os.system('convert --delay 20 --repeat 0 plots/diffusion/*.png plots/diffusion.tmp.gif')
+os.system('convert -delay 20 -loop 0 plots/diffusion/*.png plots/diffusion.tmp.gif')
 
 
 
@@ -105,6 +105,7 @@ ax2 = fig.add_subplot(gs[0, 1:])
 
 xt = torch.randn(1, 1, 28, 28, device=DEVICE)
 vec = torch.zeros(1, 10).to(DEVICE)
+vec[0, label] = 1
 for t in track(range(DIFFU_STEPS, 0, -1)):
     t_tensor = torch.tensor([[t]], device=DEVICE, dtype=torch.float32)
     xt = p_xt_1_xt(model, xt, t_tensor, vec)
@@ -128,4 +129,4 @@ for t in track(range(DIFFU_STEPS, 0, -1)):
     ax2.set_title(f'xt histogram')
 
     fig.savefig(f'plots/diffusion_inverse/{t:04d}.tmp.png')
-os.system('convert --delay 20 --repeat 0 -reverse plots/diffusion_inverse/*.png plots/diffusion_inverse.tmp.gif')
+os.system('convert -delay 20 -loop 0 -reverse plots/diffusion_inverse/*.png plots/diffusion_inverse.tmp.gif')
