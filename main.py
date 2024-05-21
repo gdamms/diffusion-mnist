@@ -224,7 +224,7 @@ img = dataset[0][0]
 NB_CHANNEL, IMG_SIZE, _ = img.shape
 NB_LABEL = 10
 
-EPOCHS = 10
+EPOCHS = 0
 LEARNING_RATE = 2e-4
 
 
@@ -355,5 +355,46 @@ if __name__ == '__main__':
                 plt.axis("off")
         plt.tight_layout()
         plt.savefig("benchmark.tmp.png")
+
+        #############
+        # Test Axel #
+        #############
+
+        # Which image is the closest?
+        plt.figure(figsize=(nb_plots, 2))
+
+        x = torch.randn(nb_plots, NB_CHANNEL, IMG_SIZE, IMG_SIZE).to(DEVICE)
+        vec = torch.randint(0, NB_LABEL, (nb_plots,), device=DEVICE)
+        vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
+
+        for ti in range(DIFFU_STEPS, 0, -1):
+            t = torch.tensor([[ti]] * nb_plots, device=DEVICE, dtype=torch.float32)
+            x = p_xt_1_xt(model, x, t, vec)
+
+        x = x * 0.5 + 0.5
+        x = x.clamp(0, 1)
+
+        for plot_i in range(nb_plots):
+            xi = x[plot_i]
+            imgs = dataset.data.to(DEVICE).to(dtype=torch.float32) / 255
+            dist = torch.norm(imgs - xi, dim=(1, 2))
+            closest_i = torch.argmin(dist)
+            closest_img = imgs[closest_i].unsqueeze(0)
+
+            plt.subplot(2, nb_plots + 1, 2 + plot_i)
+            plt.imshow(tensor_to_image(xi))
+            plt.axis("off")
+            plt.subplot(2, nb_plots + 1 , nb_plots + 3 + plot_i)
+            plt.imshow(tensor_to_image(closest_img))
+            plt.axis("off")
+        plt.suptitle("Closest image")
+        plt.subplot(2, nb_plots + 1, 1)
+        plt.text(0, 0.5, "Generated", fontsize=12)
+        plt.axis("off")
+        plt.subplot(2, nb_plots + 1, nb_plots + 2)
+        plt.text(0, 0.5, "Closest", fontsize=12)
+        plt.axis("off")
+        plt.tight_layout()
+        plt.savefig("axel.tmp.png")
 
         # plt.show()
