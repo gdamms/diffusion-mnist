@@ -77,16 +77,16 @@ class UNet(nn.Module):
 
         return x7
 
-
-class LFWcrop(Dataset):
-    def __init__(self):
+class FolderDataset(Dataset):
+    def __init__(self, path, size=(32, 32)):
         super().__init__()
-        self.path = './data/lfwcrop_color/faces'
+        self.path = path
+        self.size = size
         self.files = os.listdir(self.path)
 
     def __getitem__(self, index):
         img = cv2.imread(os.path.join(self.path, self.files[index]))
-        img = cv2.resize(img, (32, 32))
+        img = cv2.resize(img, self.size)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = np.transpose(img, (2, 0, 1)) / 255
         return torch.tensor(img, dtype=torch.float32), 0
@@ -204,12 +204,12 @@ BETA = torch.cat((torch.tensor([0.], device=DEVICE), BETA))
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
 
-dataset = datasets.MNIST(
-    root="./data",
-    train=True,
-    download=True,
-    transform=transforms.ToTensor(),
-)
+# dataset = datasets.MNIST(
+#     root="./data",
+#     train=True,
+#     download=True,
+#     transform=transforms.ToTensor(),
+# )
 # dataset = datasets.LFWPeople(
 #     root="./data",
 #     download=True,
@@ -218,13 +218,14 @@ dataset = datasets.MNIST(
 #         transforms.ToTensor(),
 #     ]),
 # )
-# dataset = LFWcrop()
+# dataset = FolderDataset('data/lfwcrop_color/faces')
+dataset = FolderDataset('data/edface')
 
 img = dataset[0][0]
 NB_CHANNEL, IMG_SIZE, _ = img.shape
-NB_LABEL = 10
+NB_LABEL = 1
 
-EPOCHS = 0
+EPOCHS = 100
 LEARNING_RATE = 2e-4
 
 
