@@ -12,6 +12,7 @@ import os
 import cv2
 
 from trainer import Trainer
+from autoencoder import Autoencoder
 
 
 class UNet(nn.Module):
@@ -176,6 +177,22 @@ class DiffusionDataset(Dataset):
         return len(self.dataset)
 
 
+class LatentDataset(Dataset):
+    def __init__(self, dataset, autoencoder):
+        super().__init__()
+        self.dataset = dataset
+        self.autoencoder = autoencoder
+
+    def __getitem__(self, index):
+        img, label = self.dataset[index]
+        img = img.to(self.autoencoder.device)
+        latent = self.autoencoder.encode(img.unsqueeze(0))
+        return latent, label
+
+    def __len__(self):
+        return len(self.dataset)
+
+
 def loss(y_pred, y_true):
     return nn.MSELoss()(y_pred, y_true)
 
@@ -204,12 +221,12 @@ BETA = torch.cat((torch.tensor([0.], device=DEVICE), BETA))
 ALPHA = 1 - BETA
 ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
 
-# dataset = datasets.MNIST(
-#     root="./data",
-#     train=True,
-#     download=True,
-#     transform=transforms.ToTensor(),
-# )
+dataset = datasets.MNIST(
+    root="./data",
+    train=True,
+    download=True,
+    transform=transforms.ToTensor(),
+)
 # dataset = datasets.LFWPeople(
 #     root="./data",
 #     download=True,
@@ -219,13 +236,16 @@ ALPHA_BAR = torch.cumprod(ALPHA, dim=0)
 #     ]),
 # )
 # dataset = FolderDataset('data/lfwcrop_color/faces')
-dataset = FolderDataset('data/edface')
+# dataset = FolderDataset('data/edface')
+
+autoencoder = Autoencoder(1, 64).to(DEVICE)
+dataset = LatentDataset(dataset, autoencoder)
 
 img = dataset[0][0]
 NB_CHANNEL, IMG_SIZE, _ = img.shape
-NB_LABEL = 1
+NB_LABEL = 10
 
-EPOCHS = 100
+EPOCHS = 10
 LEARNING_RATE = 2e-4
 
 
