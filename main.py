@@ -247,7 +247,7 @@ img = dataset[0][0]
 NB_CHANNEL, IMG_SIZE, _ = img.shape
 NB_LABEL = 10
 
-EPOCHS = 100
+EPOCHS = 0
 LEARNING_RATE = 2e-4
 
 
@@ -299,22 +299,17 @@ if __name__ == '__main__':
         xs = forward_diffusion(img)
 
         plt.figure(figsize=(nb_plots, 2.5))
-        for t, x in enumerate(xs):
-            if t not in plots_id:
-                continue
-            plot_i = plots_id.index(t)
+        for plot_i, t in enumerate(plots_id):
+            x = xs[t]
             plt.subplot(2, nb_plots + 1, plot_i + 2)
             plt.title(f"t={t}")
-            plt.imshow(tensor_to_image(dataset.autoencoder.decode(x.unsqueeze(0)).squeeze(0)))
+            plt.imshow(tensor_to_image(x), interpolation='none')
             plt.axis("off")
 
-        for t in range(1, DIFFU_STEPS+1):
+        for plot_i, t in enumerate(plots_id):
             x = q_xt_x0(img, t)[0]
-            if t not in plots_id:
-                continue
-            plot_i = plots_id.index(t)
             plt.subplot(2, nb_plots + 1, nb_plots + plot_i + 3)
-            plt.imshow(tensor_to_image(dataset.autoencoder.decode(x.unsqueeze(0)).squeeze(0)))
+            plt.imshow(tensor_to_image(x), interpolation='none')
             plt.axis("off")
 
         plt.subplot(2, nb_plots + 1, 1)
@@ -327,6 +322,7 @@ if __name__ == '__main__':
         plt.suptitle("Forward diffusion")
         plt.tight_layout()
         plt.savefig("forward_diffusion.tmp.png")
+        exit()
 
 
         # Backward diffusion
