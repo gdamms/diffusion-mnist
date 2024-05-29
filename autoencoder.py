@@ -11,6 +11,8 @@ from trainer import Trainer
 class PrintLayer(torch.nn.Module):
     def forward(self, x):
         print(x.shape)
+        print(x.min())
+        print(x.max())
         return x
 
 
@@ -37,7 +39,7 @@ class Autoencoder(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Flatten(),
             torch.nn.Linear(64 * 7 * 7, self.latent_size),
-            torch.nn.ReLU(),
+            torch.nn.Sigmoid(),
             torch.nn.Unflatten(1, latent_dim),
         )
         self.decoder = torch.nn.Sequential(
@@ -55,7 +57,7 @@ class Autoencoder(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Conv2d(16, 16, kernel_size=3, padding=1),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(16, input_dim, kernel_size=3, padding=1),
+            torch.nn.Conv2d(16, input_dim[0], kernel_size=3, padding=1),
             torch.nn.Sigmoid(),
         )
 
@@ -75,6 +77,7 @@ class AutoencoderDataset(Dataset):
     def __init__(self, dataset, device='cpu'):
         self.dataset = dataset
         self.device = device
+        self.dummy_param = torch.nn.Parameter(torch.empty(0))
 
     def __len__(self):
         return len(self.dataset)
@@ -100,7 +103,7 @@ def main():
 
     # Initialize model
     model = Autoencoder(input_dim=(1, 28, 28), latent_dim=(1, 8, 8))
-    # model.load_state_dict(torch.load('autoencoder.pth'))
+    model.load_state_dict(torch.load('autoencoder.pth'))
     model.to(device)
 
     # Train model
@@ -108,7 +111,7 @@ def main():
     lr = 1e-3
     epochs = 10
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = torch.nn.functional.mse_loss
+    criterion = torch.nn.functional.binary_cross_entropy
     trainer.train(model, dataloader, epochs, optimizer, criterion)
 
     # Save model

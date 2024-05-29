@@ -185,8 +185,8 @@ class LatentDataset(Dataset):
 
     def __getitem__(self, index):
         img, label = self.dataset[index]
-        img = img.to(self.autoencoder.device)
-        latent = self.autoencoder.encode(img.unsqueeze(0))
+        img = img.to(DEVICE)
+        latent = self.autoencoder.encode(img.unsqueeze(0)).squeeze(0)
         return latent, label
 
     def __len__(self):
@@ -199,10 +199,10 @@ def loss(y_pred, y_true):
 
 def forward_diffusion(x0):
     x = x0.clone()
-    xs = [x.cpu()]
+    xs = [x]
     for t in range(1, DIFFU_STEPS+1):
         x = q_xt_xt_1(x, t)[0]
-        xs.append(x.cpu())
+        xs.append(x)
     return xs
 
 
@@ -238,14 +238,16 @@ dataset = datasets.MNIST(
 # dataset = FolderDataset('data/lfwcrop_color/faces')
 # dataset = FolderDataset('data/edface')
 
-autoencoder = Autoencoder(1, 64).to(DEVICE)
+autoencoder = Autoencoder((1, 28, 28), (1, 8, 8)).to(DEVICE)
+autoencoder.load_state_dict(torch.load('autoencoder.pth'))
+autoencoder.eval()
 dataset = LatentDataset(dataset, autoencoder)
 
 img = dataset[0][0]
 NB_CHANNEL, IMG_SIZE, _ = img.shape
 NB_LABEL = 10
 
-EPOCHS = 10
+EPOCHS = 100
 LEARNING_RATE = 2e-4
 
 
@@ -287,7 +289,6 @@ if __name__ == '__main__':
     ##############
 
     with torch.no_grad():
-
         # Forward diffusion
         img, label = dataset[np.random.randint(0, len(dataset))]
         img = img.to(DEVICE) * 2 - 1
@@ -304,16 +305,16 @@ if __name__ == '__main__':
             plot_i = plots_id.index(t)
             plt.subplot(2, nb_plots + 1, plot_i + 2)
             plt.title(f"t={t}")
-            plt.imshow(tensor_to_image(x))
+            plt.imshow(tensor_to_image(dataset.autoencoder.decode(x.unsqueeze(0)).squeeze(0)))
             plt.axis("off")
 
         for t in range(1, DIFFU_STEPS+1):
-            x = q_xt_x0(img, t)[0].cpu()
+            x = q_xt_x0(img, t)[0]
             if t not in plots_id:
                 continue
             plot_i = plots_id.index(t)
             plt.subplot(2, nb_plots + 1, nb_plots + plot_i + 3)
-            plt.imshow(tensor_to_image(x))
+            plt.imshow(tensor_to_image(dataset.autoencoder.decode(x.unsqueeze(0)).squeeze(0)))
             plt.axis("off")
 
         plt.subplot(2, nb_plots + 1, 1)
@@ -348,7 +349,7 @@ if __name__ == '__main__':
                     plt.subplot(n_classes, nb_plots, t_plot_i + nb_plots * class_i + 1)
                     if class_i == 0:
                         plt.title(f"t={t}")
-                    plt.imshow(tensor_to_image(x[class_i]))
+                    plt.imshow(tensor_to_image(dataset.autoencoder.decode(x[class_i].unsqueeze(0)).squeeze(0)))
                     plt.axis("off")
         plt.tight_layout()
         plt.savefig("backward_diffusion.tmp.png")
@@ -372,7 +373,7 @@ if __name__ == '__main__':
             for j in range(n_classes):
                 id = i * n_classes + j
                 plt.subplot(n_classes, nb_plots, id + 1)
-                plt.imshow(tensor_to_image(x[id]))
+                plt.imshow(tensor_to_image(dataset.autoencoder.decode(x[id].unsqueeze(0)).squeeze(0)))
                 plt.axis("off")
         plt.tight_layout()
         plt.savefig("benchmark.tmp.png")
