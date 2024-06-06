@@ -142,14 +142,19 @@ def p_xt_1_xt(model, xt, t, vec):
 
 
 class DiffusionDataset(Dataset):
-    def __init__(self, dataset):
+    def __init__(self, dataset, autoencoder=None):
         super().__init__()
         self.dataset = dataset
+        self.autoencoder = autoencoder
 
     def __getitem__(self, index):
         # Get the image and the label.
         img, label = self.dataset[index]
         img = img.to(DEVICE)
+
+        # Encode the image.
+        if self.autoencoder is not None:
+            img = self.autoencoder.encode(img.unsqueeze(0)).squeeze(0)
 
         # Normalize the image.
         img = img * 2 - 1
@@ -172,22 +177,6 @@ class DiffusionDataset(Dataset):
             # y_true
             eps,
         )
-
-    def __len__(self):
-        return len(self.dataset)
-
-
-class LatentDataset(Dataset):
-    def __init__(self, dataset, autoencoder):
-        super().__init__()
-        self.dataset = dataset
-        self.autoencoder = autoencoder
-
-    def __getitem__(self, index):
-        img, label = self.dataset[index]
-        img = img.to(DEVICE)
-        latent = self.autoencoder.encode(img.unsqueeze(0)).squeeze(0)
-        return latent, label
 
     def __len__(self):
         return len(self.dataset)
@@ -238,16 +227,18 @@ dataset = datasets.MNIST(
 # dataset = FolderDataset('data/lfwcrop_color/faces')
 # dataset = FolderDataset('data/edface')
 
-autoencoder = Autoencoder((1, 28, 28), (1, 8, 8)).to(DEVICE)
+autoencoder = None
+autoencoder = Autoencoder(1, 1).to(DEVICE)
 autoencoder.load_state_dict(torch.load('autoencoder.pth'))
 autoencoder.eval()
-dataset = LatentDataset(dataset, autoencoder)
 
-img = dataset[0][0]
+img = dataset[0][0].to(DEVICE)
+if autoencoder is not None:
+    img = autoencoder.encode(img.unsqueeze(0)).squeeze(0)
 NB_CHANNEL, IMG_SIZE, _ = img.shape
 NB_LABEL = 10
 
-EPOCHS = 0
+EPOCHS = 1
 LEARNING_RATE = 2e-4
 
 
@@ -262,7 +253,7 @@ if __name__ == '__main__':
     # Load the model.
     model = UNet().to(DEVICE)
     try:
-        model.load_state_dict(torch.load('model.pth'))
+        model.load_state_dict(torch.load('mnist_latent_model.pth'))
     except FileNotFoundError:
         print("No model found, training a new one.")
         pass
@@ -271,7 +262,7 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     # Define the training dataset.
-    train_dataset = DiffusionDataset(dataset)
+    train_dataset = DiffusionDataset(dataset, autoencoder)
     train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True,
                               num_workers=4, persistent_workers=True)
     trainer = Trainer()
@@ -291,7 +282,10 @@ if __name__ == '__main__':
     with torch.no_grad():
         # Forward diffusion
         img, label = dataset[np.random.randint(0, len(dataset))]
-        img = img.to(DEVICE) * 2 - 1
+        img = img.to(DEVICE)
+        if autoencoder is not None:
+            img = autoencoder.encode(img.unsqueeze(0)).squeeze(0)
+        img = img * 2 - 1
 
         nb_plots = 10
         plots_id = [i for i in np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)]
@@ -322,7 +316,6 @@ if __name__ == '__main__':
         plt.suptitle("Forward diffusion")
         plt.tight_layout()
         plt.savefig("forward_diffusion.tmp.png")
-        exit()
 
 
         # Backward diffusion
@@ -345,7 +338,7 @@ if __name__ == '__main__':
                     plt.subplot(n_classes, nb_plots, t_plot_i + nb_plots * class_i + 1)
                     if class_i == 0:
                         plt.title(f"t={t}")
-                    plt.imshow(tensor_to_image(dataset.autoencoder.decode(x[class_i].unsqueeze(0)).squeeze(0)))
+                    plt.imshow(tensor_to_image(x[class_i]))
                     plt.axis("off")
         plt.tight_layout()
         plt.savefig("backward_diffusion.tmp.png")
@@ -368,8 +361,11 @@ if __name__ == '__main__':
         for i in range(nb_plots):
             for j in range(n_classes):
                 id = i * n_classes + j
+                img = x[id]
+                if autoencoder is not None:
+                    img = train_dataset.autoencoder.decode(img.unsqueeze(0)).squeeze(0)
                 plt.subplot(n_classes, nb_plots, id + 1)
-                plt.imshow(tensor_to_image(dataset.autoencoder.decode(x[id].unsqueeze(0)).squeeze(0)))
+                plt.imshow(tensor_to_image(img))
                 plt.axis("off")
         plt.tight_layout()
         plt.savefig("benchmark.tmp.png")
