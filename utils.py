@@ -1,4 +1,6 @@
 import numpy as np
+import scipy.linalg
+import matplotlib.pyplot as plt
 
 
 def fid(reals, fakes):
@@ -8,7 +10,6 @@ def fid(reals, fakes):
         reals (numpy.array): Real images.
         fakes (numpy.array): Fake images.
     """
-    print(reals.shape, fakes.shape)
     reals = reals.reshape(reals.shape[0], -1)
     fakes = fakes.reshape(fakes.shape[0], -1)
 
@@ -19,7 +20,45 @@ def fid(reals, fakes):
 
     diff = mu_real - mu_fake
     covmean = np.dot(sigma_real, sigma_fake.T)
-    covmean = np.sqrt(covmean * (covmean > 0))
-    print(np.trace(covmean))
+    covmean, _ = scipy.linalg.sqrtm(sigma_real.dot(sigma_fake), disp=False)
+
+    if not np.isfinite(covmean).all():
+        eps=1e-6
+        offset = np.eye(sigma_real.shape[0]) * eps
+        ncovmean = scipy.linalg.sqrtm((sigma_real + offset).dot(sigma_fake + offset))
+        covmean = ncovmean
+
+    if np.iscomplexobj(covmean):
+        covmean = covmean.real
 
     return diff @ diff + np.trace(sigma_real) + np.trace(sigma_fake) - 2 * np.trace(covmean)
+
+
+def kl(reals, fakes):
+    """KL divergence calculation.
+
+    Args:
+        reals (numpy.array): Real images.
+        fakes (numpy.array): Fake images.
+    """
+    reals = reals.transpose(1, 0, 2, 3).reshape(reals.shape[1], -1)
+    fakes = fakes.transpose(1, 0, 2, 3).reshape(fakes.shape[1], -1)
+
+    hist_real = np.apply_along_axis(lambda a: np.histogram(a, bins=40, range=(-1, 1))[0], 1, reals)
+    hist_fake = np.apply_along_axis(lambda a: np.histogram(a, bins=40, range=(-1, 1))[0], 1, fakes)
+
+    plt.figure()
+    colors = ['#ff0000', '#00ff00', '#0000ff']
+    for i in range(reals.shape[0]):
+        plt.plot(hist_real[i], label='real', color=colors[i])
+        plt.plot(hist_fake[i], label='fake', color=colors[i], linestyle='dashed')
+    plt.legend()
+    plt.savefig('hist.tmp.png')
+
+    hist_real = hist_real + 1
+    hist_fake = hist_fake + 1
+
+    hist_real = hist_real / np.sum(hist_real)
+    hist_fake = hist_fake / np.sum(hist_fake)
+
+    return np.mean(np.log(hist_real / hist_fake))

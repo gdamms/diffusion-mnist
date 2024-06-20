@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.attention as attention
 from torch.utils.data import DataLoader, Dataset
+from rich.progress import track
 
 from torchvision import datasets, transforms
 
@@ -14,7 +15,7 @@ import cv2
 
 from trainer import Trainer
 from autoencoder import Autoencoder
-from utils import fid
+from utils import *
 
 
 class SelfAttention(nn.Module):
@@ -303,104 +304,104 @@ if __name__ == '__main__':
     ##############
 
     with torch.no_grad():
-        # # Forward diffusion
-        # img, label = dataset[np.random.randint(0, len(dataset))]
-        # img = img.to(DEVICE)
-        # if autoencoder is not None:
-        #     img = autoencoder.encode(img.unsqueeze(0)).squeeze(0)
-        # img = img * 2 - 1
+        # Forward diffusion
+        img, label = dataset[np.random.randint(0, len(dataset))]
+        img = img.to(DEVICE)
+        if autoencoder is not None:
+            img = autoencoder.encode(img.unsqueeze(0)).squeeze(0)
+        img = img * 2 - 1
 
-        # nb_plots = 10
-        # plots_id = [i for i in np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)]
+        nb_plots = 10
+        plots_id = [i for i in np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)]
 
-        # xs = forward_diffusion(img)
+        xs = forward_diffusion(img)
 
-        # plt.figure(figsize=(nb_plots, 2.5))
-        # for plot_i, t in enumerate(plots_id):
-        #     x = xs[t]
-        #     plt.subplot(2, nb_plots + 1, plot_i + 2)
-        #     plt.title(f"t={t}")
-        #     plt.imshow(tensor_to_image(x), interpolation='none')
-        #     plt.axis("off")
+        plt.figure(figsize=(nb_plots, 2.5))
+        for plot_i, t in enumerate(plots_id):
+            x = xs[t]
+            plt.subplot(2, nb_plots + 1, plot_i + 2)
+            plt.title(f"t={t}")
+            plt.imshow(tensor_to_image(x), interpolation='none')
+            plt.axis("off")
 
-        # for plot_i, t in enumerate(plots_id):
-        #     x = q_xt_x0(img, t)[0]
-        #     plt.subplot(2, nb_plots + 1, nb_plots + plot_i + 3)
-        #     plt.imshow(tensor_to_image(x), interpolation='none')
-        #     plt.axis("off")
+        for plot_i, t in enumerate(plots_id):
+            x = q_xt_x0(img, t)[0]
+            plt.subplot(2, nb_plots + 1, nb_plots + plot_i + 3)
+            plt.imshow(tensor_to_image(x), interpolation='none')
+            plt.axis("off")
 
-        # plt.subplot(2, nb_plots + 1, 1)
-        # plt.text(0, 0.5, "Implicit", fontsize=12)
-        # plt.axis("off")
-        # plt.subplot(2, nb_plots + 1, nb_plots + 2)
-        # plt.text(0, 0.5, "Explicit", fontsize=12)
-        # plt.axis("off")
+        plt.subplot(2, nb_plots + 1, 1)
+        plt.text(0, 0.5, "Implicit", fontsize=12)
+        plt.axis("off")
+        plt.subplot(2, nb_plots + 1, nb_plots + 2)
+        plt.text(0, 0.5, "Explicit", fontsize=12)
+        plt.axis("off")
 
-        # plt.suptitle("Forward diffusion")
-        # plt.tight_layout()
-        # plt.savefig("forward_diffusion.tmp.png")
-
-
-        # # Backward diffusion
-        # t_plots = np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)
-
-        # n_classes = 10
-
-        # x = torch.randn(n_classes, NB_CHANNEL, IMG_SIZE, IMG_SIZE, device=DEVICE)
-        # vec = torch.tensor([[min(i, NB_LABEL-1)] for i in range(n_classes)], dtype=torch.int64)
-        # vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
-
-        # plt.figure(figsize=(nb_plots, n_classes))
-        # plt.suptitle("Backward diffusion")
-        # for t in range(DIFFU_STEPS, 0, -1):
-        #     t_tensor = torch.tensor([[t]] * n_classes, device=DEVICE, dtype=torch.float32)
-        #     x = p_xt_1_xt(model, x, t_tensor, vec)
-        #     if t in t_plots:
-        #         t_plot_i = nb_plots - t_plots.tolist().index(t) - 1
-        #         for class_i in range(n_classes):
-        #             plt.subplot(n_classes, nb_plots, t_plot_i + nb_plots * class_i + 1)
-        #             if class_i == 0:
-        #                 plt.title(f"t={t}")
-        #             plt.imshow(tensor_to_image(x[class_i]))
-        #             plt.axis("off")
-        # plt.tight_layout()
-        # plt.savefig("backward_diffusion.tmp.png")
+        plt.suptitle("Forward diffusion")
+        plt.tight_layout()
+        plt.savefig("forward_diffusion.tmp.png")
 
 
-        # # Benchmark
-        # x = torch.randn(nb_plots * n_classes, NB_CHANNEL, IMG_SIZE, IMG_SIZE).to(DEVICE)
-        # vec = sum([[[min(i, NB_LABEL-1)]] * nb_plots for i in range(n_classes)], [])
-        # vec = torch.tensor(vec, device=DEVICE, dtype=torch.int64)
-        # vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
+        # Backward diffusion
+        t_plots = np.linspace(1, DIFFU_STEPS, nb_plots, dtype=int)
 
-        # for ti in range(DIFFU_STEPS, 0, -1):
-        #     t = torch.tensor([[ti]] * n_classes * nb_plots, device=DEVICE, dtype=torch.float32)
-        #     x = p_xt_1_xt(model, x, t, vec)
+        n_classes = 10
 
-        # x = x * 0.5 + 0.5
-        # x = x.clamp(0, 1)
+        x = torch.randn(n_classes, NB_CHANNEL, IMG_SIZE, IMG_SIZE, device=DEVICE)
+        vec = torch.tensor([[min(i, NB_LABEL-1)] for i in range(n_classes)], dtype=torch.int64)
+        vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
 
-        # plt.figure(figsize=(nb_plots, n_classes))
-        # for i in range(nb_plots):
-        #     for j in range(n_classes):
-        #         id = i * n_classes + j
-        #         img = x[id]
-        #         if autoencoder is not None:
-        #             img = train_dataset.autoencoder.decode(img.unsqueeze(0)).squeeze(0)
-        #         plt.subplot(n_classes, nb_plots, id + 1)
-        #         plt.imshow(tensor_to_image(img))
-        #         plt.axis("off")
-        # plt.tight_layout()
-        # plt.savefig("benchmark.tmp.png")
+        plt.figure(figsize=(nb_plots, n_classes))
+        plt.suptitle("Backward diffusion")
+        for t in track(range(DIFFU_STEPS, 0, -1), description='Diffusing...'):
+            t_tensor = torch.tensor([[t]] * n_classes, device=DEVICE, dtype=torch.float32)
+            x = p_xt_1_xt(model, x, t_tensor, vec)
+            if t in t_plots:
+                t_plot_i = nb_plots - t_plots.tolist().index(t) - 1
+                for class_i in range(n_classes):
+                    plt.subplot(n_classes, nb_plots, t_plot_i + nb_plots * class_i + 1)
+                    if class_i == 0:
+                        plt.title(f"t={t}")
+                    plt.imshow(tensor_to_image(x[class_i]))
+                    plt.axis("off")
+        plt.tight_layout()
+        plt.savefig("backward_diffusion.tmp.png")
 
 
-        # FID
-        n_samples = 10
-        batch_size = 4
-        n_batches = n_samples // batch_size
+        # Benchmark
+        x = torch.randn(nb_plots * n_classes, NB_CHANNEL, IMG_SIZE, IMG_SIZE).to(DEVICE)
+        vec = sum([[[min(i, NB_LABEL-1)]] * nb_plots for i in range(n_classes)], [])
+        vec = torch.tensor(vec, device=DEVICE, dtype=torch.int64)
+        vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
+
+        for ti in track(range(DIFFU_STEPS, 0, -1), description='Benchmarking...'):
+            t = torch.tensor([[ti]] * n_classes * nb_plots, device=DEVICE, dtype=torch.float32)
+            x = p_xt_1_xt(model, x, t, vec)
+
+        x = x * 0.5 + 0.5
+        x = x.clamp(0, 1)
+
+        plt.figure(figsize=(nb_plots, n_classes))
+        for i in range(nb_plots):
+            for j in range(n_classes):
+                id = i * n_classes + j
+                img = x[id]
+                if autoencoder is not None:
+                    img = train_dataset.autoencoder.decode(img.unsqueeze(0)).squeeze(0)
+                plt.subplot(n_classes, nb_plots, id + 1)
+                plt.imshow(tensor_to_image(img))
+                plt.axis("off")
+        plt.tight_layout()
+        plt.savefig("benchmark.tmp.png")
+
+
+        # Metrics
+        batch_size = 64
+        n_batches = 16
+        n_samples = batch_size * n_batches
 
         fakes = np.zeros((0, NB_CHANNEL, IMG_SIZE, IMG_SIZE))
-        for _ in range(n_batches):
+        for _ in track(range(n_batches), description=f'Sampling {n_samples} images...'):
             x = torch.randn(batch_size, NB_CHANNEL, IMG_SIZE, IMG_SIZE).to(DEVICE)
             vec = torch.randint(0, NB_LABEL, (batch_size,)).to(DEVICE)
             vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
@@ -414,8 +415,13 @@ if __name__ == '__main__':
         reals = torch.stack([dataset[i][0] for i in range(n_samples)]).cpu().numpy()
         reals = reals * 2 - 1
 
+
         fid_score = fid(reals, fakes)
         print(f"FID score: {fid_score}")
+
+
+        kl_score = kl(reals, fakes)
+        print(f"KL divergence: {kl_score}")
 
 
         # plt.show()
