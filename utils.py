@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.linalg
-import matplotlib.pyplot as plt
+import cv2
 
 
 def fid(reals, fakes):
@@ -78,3 +78,31 @@ def jsd(reals, fakes):
     hist_avg = (hist_real + hist_fake) / 2
 
     return 0.5 * (np.mean(np.log(hist_real / hist_avg)) + np.mean(np.log(hist_fake / hist_avg)))
+
+
+def haar(image):
+    # Load the Haar cascade for face detection
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+    # Convert the image to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Perform face detection
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4)
+
+    # Draw rectangles around the detected faces
+    for (x, y, w, h) in faces:
+        cv2.rectangle(image, (x, y), (x+w, y+h), (255, 0, 0), 2)
+
+    # Display the result
+    cv2.imshow('Face Detection', image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    # Load the image
+    image = cv2.imread('data/edface/500/03120500_000.png')
+
+    # Perform face detection
+    haar(image)
