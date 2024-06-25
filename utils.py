@@ -47,14 +47,6 @@ def kl(reals, fakes):
     hist_real = np.apply_along_axis(lambda a: np.histogram(a, bins=40, range=(-1, 1))[0], 1, reals)
     hist_fake = np.apply_along_axis(lambda a: np.histogram(a, bins=40, range=(-1, 1))[0], 1, fakes)
 
-    plt.figure()
-    colors = ['#ff0000', '#00ff00', '#0000ff']
-    for i in range(reals.shape[0]):
-        plt.plot(hist_real[i], label='real', color=colors[i])
-        plt.plot(hist_fake[i], label='fake', color=colors[i], linestyle='dashed')
-    plt.legend()
-    plt.savefig('hist.tmp.png')
-
     hist_real = hist_real + 1
     hist_fake = hist_fake + 1
 
@@ -62,3 +54,27 @@ def kl(reals, fakes):
     hist_fake = hist_fake / np.sum(hist_fake)
 
     return np.mean(np.log(hist_real / hist_fake))
+
+
+def jsd(reals, fakes):
+    """Jensen-Shannon divergence calculation.
+
+    Args:
+        reals (numpy.array): Real images.
+        fakes (numpy.array): Fake images.
+    """
+    reals = reals.transpose(1, 0, 2, 3).reshape(reals.shape[1], -1)
+    fakes = fakes.transpose(1, 0, 2, 3).reshape(fakes.shape[1], -1)
+
+    hist_real = np.apply_along_axis(lambda a: np.histogram(a, bins=40, range=(-1, 1))[0], 1, reals)
+    hist_fake = np.apply_along_axis(lambda a: np.histogram(a, bins=40, range=(-1, 1))[0], 1, fakes)
+
+    hist_real = hist_real + 1
+    hist_fake = hist_fake + 1
+
+    hist_real = hist_real / np.sum(hist_real)
+    hist_fake = hist_fake / np.sum(hist_fake)
+
+    hist_avg = (hist_real + hist_fake) / 2
+
+    return 0.5 * (np.mean(np.log(hist_real / hist_avg)) + np.mean(np.log(hist_fake / hist_avg)))

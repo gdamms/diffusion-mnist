@@ -423,5 +423,11 @@ if __name__ == '__main__':
         kl_score = kl(reals, fakes)
         print(f"KL divergence: {kl_score}")
 
+        rkl_score = kl(fakes, reals)
+        print(f"Reverse KL divergence: {rkl_score}")
+
+        jsd_score = jsd(reals, fakes)
+        print(f"Jensen-Shannon divergence: {jsd_score}")
+
 
         # plt.show()
