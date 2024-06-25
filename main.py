@@ -53,15 +53,15 @@ class UNet(nn.Module):
         self.conv2 = nn.Conv2d(64, 64, 3, padding=1)
         self.maxpool1 = nn.MaxPool2d(2, 2)
         self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
-        self.att1 = SelfAttention(128, 8)
+        # self.att1 = SelfAttention(128, 8)
         self.conv4 = nn.Conv2d(128, 128, 3, padding=1)
         self.maxpool2 = nn.MaxPool2d(2, 2)
         self.conv5 = nn.Conv2d(128, 256, 3, padding=1)
-        self.att2 = SelfAttention(256, 8)
+        # self.att2 = SelfAttention(256, 8)
         self.conv6 = nn.Conv2d(256, 256, 3, padding=1)
         self.upconv1 = nn.ConvTranspose2d(256, 128, 2, stride=2)
         self.conv7 = nn.Conv2d(256, 128, 3, padding=1)
-        self.att3 = SelfAttention(128, 8)
+        # self.att3 = SelfAttention(128, 8)
         self.conv8 = nn.Conv2d(128, 128, 3, padding=1)
         self.upconv2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
         self.conv9 = nn.Conv2d(128, 64, 3, padding=1)
@@ -83,16 +83,16 @@ class UNet(nn.Module):
         x1 = F.relu(self.conv2(x1))
         x2 = self.maxpool1(x1)
         x2 = F.relu(self.conv3(x2))
-        x2 = self.att1(x2)
+        # x2 = self.att1(x2)
         x2 = F.relu(self.conv4(x2))
         x3 = self.maxpool2(x2)
         x3 = F.relu(self.conv5(x3))
-        x3 = self.att2(x3)
+        # x3 = self.att2(x3)
         x5 = F.relu(self.conv6(x3))
         x6 = self.upconv1(x5)
         x6 = torch.cat((x6, x2), dim=1)
         x6 = F.relu(self.conv7(x6))
-        x6 = self.att3(x6)
+        # x6 = self.att3(x6)
         x6 = F.relu(self.conv8(x6))
         x7 = self.upconv2(x6)
         x7 = torch.cat((x7, x1), dim=1)
@@ -262,8 +262,37 @@ if autoencoder is not None:
 NB_CHANNEL, IMG_SIZE, _ = img.shape
 NB_LABEL = 1
 
-EPOCHS = 0
+EPOCHS = 200
 LEARNING_RATE = 2e-4
+
+
+def epoch_callback(epoch_i, epochs, model, trainer):
+    if epoch_i % 10 == 0 or epoch_i == epochs - 1:
+        print("Calculating metrics...")
+        with torch.no_grad():
+            batch_size = 64
+            n_batches = 16
+            n_samples = batch_size * n_batches
+
+            fakes = np.zeros((0, NB_CHANNEL, IMG_SIZE, IMG_SIZE))
+            for _ in range(n_batches):
+                x = torch.randn(batch_size, NB_CHANNEL, IMG_SIZE, IMG_SIZE).to(DEVICE)
+                vec = torch.randint(0, NB_LABEL, (batch_size,)).to(DEVICE)
+                vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
+
+                for t in range(DIFFU_STEPS, 0, -1):
+                    t_tensor = torch.tensor([[t]] * batch_size, device=DEVICE, dtype=torch.float32)
+                    x = p_xt_1_xt(model, x, t_tensor, vec)
+
+                fakes = np.concatenate((fakes, x.cpu().numpy()))
+
+            reals = torch.stack([dataset[i][0] for i in range(n_samples)]).cpu().numpy()
+            reals = reals * 2 - 1
+
+            trainer.writer.add_scalars('Metrics/FID', {trainer.date_time: fid(reals, fakes)}, epoch_i)
+            trainer.writer.add_scalars('Metrics/KL', {trainer.date_time: kl(reals, fakes)}, epoch_i)
+            trainer.writer.add_scalars('Metrics/RKL', {trainer.date_time: kl(fakes, reals)}, epoch_i)
+            trainer.writer.add_scalars('Metrics/JSD', {trainer.date_time: jsd(reals, fakes)}, epoch_i)
 
 
 if __name__ == '__main__':
@@ -277,7 +306,7 @@ if __name__ == '__main__':
     # Load the model.
     model = UNet().to(DEVICE)
     try:
-        model.load_state_dict(torch.load('edf_att_model.pth'))
+        model.load_state_dict(torch.load('model.pth'))
     except FileNotFoundError:
         print("No model found, training a new one.")
         pass
@@ -294,7 +323,7 @@ if __name__ == '__main__':
     epochs = EPOCHS
 
     # Train the model.
-    trainer.train(model, train_loader, epochs, optimizer, criterion)
+    trainer.train(model, train_loader, epochs, optimizer, criterion, epoch_callbacks=[epoch_callback])
 
     # Save the model.
     torch.save(model.state_dict(), 'model.pth')
@@ -418,7 +447,6 @@ if __name__ == '__main__':
 
         fid_score = fid(reals, fakes)
         print(f"FID score: {fid_score}")
-
 
         kl_score = kl(reals, fakes)
         print(f"KL divergence: {kl_score}")

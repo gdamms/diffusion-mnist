@@ -1,9 +1,12 @@
 import torch
 import torch.utils.data
+from torch.utils.tensorboard import SummaryWriter
 
 import rich.progress
 
 from typing import *
+
+import datetime
 
 
 class TrainProgress(rich.progress.Progress):
@@ -289,6 +292,7 @@ class Trainer:
     def __init__(self):
         """Initialize the trainer."""
         self.progress: TrainProgress | None = None
+        self.writer: SummaryWriter | None = None
 
     def train(
         self: 'Trainer',
@@ -301,6 +305,7 @@ class Trainer:
         test_loader: torch.utils.data.DataLoader | None = None,
         metrics: List[Callable[[torch.Tensor,
                                 torch.Tensor], torch.Tensor]] = [],
+        epoch_callbacks: List[Callable[[int, torch.nn.Module], None]] = [],
     ):
         """Train the model for the given number of epochs.
 
@@ -311,7 +316,12 @@ class Trainer:
             optimizer (torch.optim.Optimizer): The optimizer to use.
             criterion (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): The loss function to use.
             val_loader (torch.utils.data.DataLoader, optional): The validation dataset. Defaults to None.
+            test_loader (torch.utils.data.DataLoader, optional): The test dataset. Defaults to None.
+            metrics (List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]], optional): The metrics to use. Defaults to [].
+            epoch_callbacks (List[Callable[[int, torch.nn.Module], None]], optional): The callbacks to call at the end of each epoch. Defaults to [].
         """
+        self.writer = SummaryWriter(log_dir='runs')
+        self.date_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         with TrainProgress(
             nb_epochs=epochs,
             train_size=len(train_loader),
@@ -320,13 +330,14 @@ class Trainer:
         ) as progress:
             self.progress = progress
 
-            for _ in range(epochs):
+            for epoch_i in range(epochs):
                 self.train_epoch(
                     model,
                     train_loader,
                     optimizer,
                     criterion,
                     metrics,
+                    epoch_i,
                 )
                 if val_loader:
                     self.validate(
@@ -334,12 +345,15 @@ class Trainer:
                         val_loader,
                         metrics + [criterion],
                     )
+                for callback in epoch_callbacks:
+                    callback(epoch_i=epoch_i, epochs=epochs, model=model, trainer=self)
             if test_loader:
                 self.test(
                     model,
                     test_loader,
                     metrics + [criterion],
                 )
+        self.writer.close()
 
     def train_epoch(
         self: 'Trainer',
@@ -348,6 +362,7 @@ class Trainer:
         optimizer: torch.optim.Optimizer,
         criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         metrics: list[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
+        epoch_i: int,
     ):
         """Train the model for one epoch.
 
@@ -357,6 +372,7 @@ class Trainer:
             optimizer (torch.optim.Optimizer): The optimizer to use.
             criterion (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): The loss function to use.
             metrics (list[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]): The metrics to use.
+            epoch_i (int): The current epoch.
         """
         model.train()
         for batch in train_loader:
@@ -377,6 +393,8 @@ class Trainer:
             values[criterion.__name__] = loss.item()
             self.progress.step()
             self.progress.new_train_values(values)
+
+        self.writer.add_scalars('Criterion/train', {self.date_time: loss.item()}, epoch_i)
 
     def validate(
         self: 'Trainer',
