@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import torch.nn.attention as attention
 from torch.utils.data import DataLoader, Dataset
 from rich.progress import track
+import io
+from PIL import Image
 
 from torchvision import datasets, transforms
 
@@ -228,6 +230,21 @@ def tensor_to_image(tensor):
     return img
 
 
+def tensor_to_images(tensor):
+    img = tensor.clone().detach().cpu().numpy().transpose(0, 2, 3, 1)
+    img -= img.min()
+    img /= img.max()
+    return img
+
+
+def figure_to_image(figure):
+    buf = io.BytesIO()
+    figure.savefig(buf, format='png')
+    buf.seek(0)
+    image = np.array(Image.open(buf))
+    return image
+
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 DIFFU_STEPS = 1000
@@ -264,18 +281,18 @@ if autoencoder is not None:
 NB_CHANNEL, IMG_SIZE, _ = img.shape
 NB_LABEL = 1
 
-EPOCHS = 1
+EPOCHS = 200
 LEARNING_RATE = 2e-4
 
 
 def epoch_callback(trainer: Trainer):
     epoch_i = trainer.epoch_i
-    epochs = trainer.epochs
 
-    if epoch_i % 10 == 0 or epoch_i == epochs:
+    if epoch_i % 10 == 0 or epoch_i == trainer.epoch_end:
         save_path = f'runs/{trainer.run_name}/checkpoints/{epoch_i:04}e.pt'
         torch.save(trainer.model, save_path)
-        print(f"Model saved at {save_path}")
+        save_path = f'runs/{trainer.run_name}/checkpoints/last.pt'
+        torch.save(trainer.model, save_path)
 
         print("Calculating metrics...")
         with torch.no_grad():
@@ -293,7 +310,10 @@ def epoch_callback(trainer: Trainer):
                     t_tensor = torch.tensor([[t]] * batch_size, device=DEVICE, dtype=torch.float32)
                     x = p_xt_1_xt(model, x, t_tensor, vec)
 
-                fakes = np.concatenate((fakes, x.cpu().numpy()))
+                x = x.cpu().numpy()
+                x -= x.min(axis=(1, 2, 3), keepdims=True)
+                x /= x.max(axis=(1, 2, 3), keepdims=True)
+                fakes = np.concatenate((fakes, x))
 
             reals = torch.stack([dataset[i][0] for i in range(n_samples)]).cpu().numpy()
             reals = reals * 2 - 1
@@ -303,7 +323,15 @@ def epoch_callback(trainer: Trainer):
             trainer.writer.add_scalar('RKL/Validation', kl(fakes, reals), epoch_i)
             trainer.writer.add_scalar('JSD/Validation', jsd(reals, fakes), epoch_i)
 
-            trainer.writer.add_images('Fakes/Validation', fakes[:16], epoch_i)
+
+            fig = plt.figure(figsize=(16, 16))
+            for i in range(16):
+                plt.subplot(4, 4, i + 1)
+                plt.imshow(fakes[i].transpose(1, 2, 0))
+                plt.axis("off")
+            plt.tight_layout()
+            trainer.writer.add_image('Fakes/Validation', figure_to_image(fig), epoch_i, dataformats='HWC')
+            plt.close(fig)
 
 
 if __name__ == '__main__':
@@ -315,12 +343,8 @@ if __name__ == '__main__':
     torch.multiprocessing.set_start_method("spawn")
 
     # Load the model.
-    model = UNetEDF().to(DEVICE)
-    # try:
-    #     model = torch.load('model.pth')
-    # except FileNotFoundError:
-    #     print("No model found, training a new one.")
-    #     pass
+    # model = UNetEDF().to(DEVICE)
+    model = torch.load('runs/UNetEDF_20240702-141225/checkpoints/last.pt')
 
     # Define the optimizer.
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
@@ -423,7 +447,7 @@ if __name__ == '__main__':
                 id = i * n_classes + j
                 img = x[id]
                 if autoencoder is not None:
-                    img = train_dataset.autoencoder.decode(img.unsqueeze(0)).squeeze(0)
+                    img = autoencoder.decode(img.unsqueeze(0)).squeeze(0)
                 plt.subplot(n_classes, nb_plots, id + 1)
                 plt.imshow(tensor_to_image(img))
                 plt.axis("off")
@@ -431,38 +455,38 @@ if __name__ == '__main__':
         plt.savefig("benchmark.tmp.png")
 
 
-        # Metrics
-        batch_size = 64
-        n_batches = 16
-        n_samples = batch_size * n_batches
+        # # Metrics
+        # batch_size = 64
+        # n_batches = 16
+        # n_samples = batch_size * n_batches
 
-        fakes = np.zeros((0, NB_CHANNEL, IMG_SIZE, IMG_SIZE))
-        for _ in track(range(n_batches), description=f'Sampling {n_samples} images...'):
-            x = torch.randn(batch_size, NB_CHANNEL, IMG_SIZE, IMG_SIZE).to(DEVICE)
-            vec = torch.randint(0, NB_LABEL, (batch_size,)).to(DEVICE)
-            vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
+        # fakes = np.zeros((0, NB_CHANNEL, IMG_SIZE, IMG_SIZE))
+        # for _ in track(range(n_batches), description=f'Sampling {n_samples} images...'):
+        #     x = torch.randn(batch_size, NB_CHANNEL, IMG_SIZE, IMG_SIZE).to(DEVICE)
+        #     vec = torch.randint(0, NB_LABEL, (batch_size,)).to(DEVICE)
+        #     vec = torch.nn.functional.one_hot(vec, num_classes=NB_LABEL).to(device=DEVICE, dtype=torch.float32)
 
-            for t in range(DIFFU_STEPS, 0, -1):
-                t_tensor = torch.tensor([[t]] * batch_size, device=DEVICE, dtype=torch.float32)
-                x = p_xt_1_xt(model, x, t_tensor, vec)
+        #     for t in range(DIFFU_STEPS, 0, -1):
+        #         t_tensor = torch.tensor([[t]] * batch_size, device=DEVICE, dtype=torch.float32)
+        #         x = p_xt_1_xt(model, x, t_tensor, vec)
 
-            fakes = np.concatenate((fakes, x.cpu().numpy()))
+        #     fakes = np.concatenate((fakes, x.cpu().numpy()))
 
-        reals = torch.stack([dataset[i][0] for i in range(n_samples)]).cpu().numpy()
-        reals = reals * 2 - 1
+        # reals = torch.stack([dataset[i][0] for i in range(n_samples)]).cpu().numpy()
+        # reals = reals * 2 - 1
 
 
-        fid_score = fid(reals, fakes)
-        print(f"FID score: {fid_score}")
+        # fid_score = fid(reals, fakes)
+        # print(f"FID score: {fid_score}")
 
-        kl_score = kl(reals, fakes)
-        print(f"KL divergence: {kl_score}")
+        # kl_score = kl(reals, fakes)
+        # print(f"KL divergence: {kl_score}")
 
-        rkl_score = kl(fakes, reals)
-        print(f"Reverse KL divergence: {rkl_score}")
+        # rkl_score = kl(fakes, reals)
+        # print(f"Reverse KL divergence: {rkl_score}")
 
-        jsd_score = jsd(reals, fakes)
-        print(f"Jensen-Shannon divergence: {jsd_score}")
+        # jsd_score = jsd(reals, fakes)
+        # print(f"Jensen-Shannon divergence: {jsd_score}")
 
 
         # plt.show()
