@@ -5,7 +5,7 @@ from torchvision import datasets, transforms
 
 import matplotlib.pyplot as plt
 
-from trainer import Trainer
+from trainer import train
 
 
 class PrintLayer(torch.nn.Module):
@@ -109,12 +109,11 @@ def main():
     model.to(device)
 
     # Train model
-    trainer = Trainer()
     lr = 1e-3
     epochs = 1
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.functional.binary_cross_entropy
-    trainer.train(model, dataloader, epochs, optimizer, criterion)
+    train(model, dataloader, epochs, optimizer, criterion)
 
     # Save model
     torch.save(model.state_dict(), 'autoencoder.pth')
