@@ -38,7 +38,7 @@ class DiffusionDataset(Dataset):
         autoencoder: Optional autoencoder for latent diffusion
     """
 
-    def __init__(self, dataset: Dataset, autoencoder: torch.nn.Module = None):
+    def __init__(self, dataset: Dataset, autoencoder: torch.nn.Module | None = None):
         super().__init__()
         self.dataset = dataset
         self.autoencoder = autoencoder
@@ -87,7 +87,7 @@ class DiffusionDatasetX0(Dataset):
         autoencoder: Optional autoencoder for latent diffusion
     """
 
-    def __init__(self, dataset: Dataset, autoencoder: torch.nn.Module = None):
+    def __init__(self, dataset: Dataset, autoencoder: torch.nn.Module | None = None):
         super().__init__()
         self.dataset = dataset
         self.autoencoder = autoencoder
@@ -143,6 +143,7 @@ class AutoencoderDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         data = self.dataset[idx][0].to(DEVICE)
+        # data = data * 2 - 1  # Normalize to [-1, 1]
         return data, data
 
 
@@ -151,7 +152,7 @@ def get_diffusion_dataloader(
     batch_size: int = 64,
     shuffle: bool = True,
     num_workers: int = 4,
-    autoencoder: torch.nn.Module = None,
+    autoencoder: torch.nn.Module | None = None,
 ) -> DataLoader:
     """
     Create a DataLoader for diffusion training.

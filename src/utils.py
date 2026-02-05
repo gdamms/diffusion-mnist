@@ -6,9 +6,9 @@ import os
 import io
 import numpy as np
 import torch
-import scipy.linalg
 from PIL import Image
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from .config import CHECKPOINT_DIR, PLOTS_DIR
 
@@ -51,18 +51,18 @@ def tensor_to_images(tensor: torch.Tensor) -> np.ndarray:
     return img
 
 
-def figure_to_image(figure: plt.Figure) -> np.ndarray:
+def figure_to_image(figure: go.Figure) -> np.ndarray:
     """
-    Convert a matplotlib figure to a numpy image array.
+    Convert a plotly figure to a numpy image array.
 
     Args:
-        figure: Matplotlib figure
+        figure: Plotly figure
 
     Returns:
         Numpy array of the figure image
     """
     buf = io.BytesIO()
-    figure.savefig(buf, format='png')
+    figure.write_image(buf, format='png')
     buf.seek(0)
     image = np.array(Image.open(buf))
     return image
@@ -97,14 +97,14 @@ def load_checkpoint(model: torch.nn.Module, filename: str) -> torch.nn.Module:
     return model
 
 
-def save_plot(figure: plt.Figure, filename: str):
+def save_plot(figure: go.Figure, filename: str):
     """
-    Save a matplotlib figure to the plots directory.
+    Save a plotly figure to the plots directory.
 
     Args:
-        figure: Matplotlib figure to save
+        figure: Plotly figure to save
         filename: Filename (will be saved in PLOTS_DIR)
     """
     ensure_dirs()
     path = os.path.join(PLOTS_DIR, filename)
-    figure.savefig(path)
+    figure.write_image(path)

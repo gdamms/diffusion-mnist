@@ -8,6 +8,7 @@ plots/
 checkpoints/
 
 # MLflow artifacts
+mlruns/
 mlflow.db
 
 # Python bytecode

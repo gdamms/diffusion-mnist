@@ -4,17 +4,18 @@ Generate samples from a trained model and visualize results.
 """
 
 from models import UNetMNIST
-from src.utils import ensure_dirs, tensor_to_image, load_checkpoint
+from src.utils import ensure_dirs, save_plot, tensor_to_image, load_checkpoint
 from src.dataloader import get_mnist_dataset
 from src.diffusion import p_xt_1_xt_x0_pred, forward_diffusion, q_xt_x0
 from src.config import (
     DEVICE, DIFFU_STEPS, NB_CHANNEL, IMG_SIZE, NB_LABEL,
-    CHECKPOINT_DIR, PLOTS_DIR
+    CHECKPOINT_DIR,
 )
 import os
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from rich.progress import track
 
 import sys
@@ -65,12 +66,14 @@ def generate_samples(
     return x
 
 
-def visualize_forward_diffusion(save_path: str | None = None):
+def visualize_forward_diffusion(save_path: str | None = None) -> go.Figure:
     """
     Visualize the forward diffusion process on a real image.
 
     Args:
         save_path: Path to save the visualization
+    Returns:
+        Plotly figure object
     """
     ensure_dirs()
 
@@ -90,42 +93,73 @@ def visualize_forward_diffusion(save_path: str | None = None):
     n_plots = 10
     timesteps = np.linspace(1, DIFFU_STEPS, n_plots, dtype=int)
 
-    fig, axes = plt.subplots(2, n_plots + 1, figsize=(2 * n_plots, 5))
+    # Create plotly figure
+    fig = make_subplots(
+        rows=2, cols=n_plots + 1,
+        horizontal_spacing=0.01,
+        vertical_spacing=0.1
+    )
 
-    # Row labels
-    axes[0, 0].text(0.5, 0.5, 'Step-by-step', ha='center', va='center', fontsize=10)
-    axes[0, 0].axis('off')
-    axes[1, 0].text(0.5, 0.5, 'Direct', ha='center', va='center', fontsize=10)
-    axes[1, 0].axis('off')
+    # Add row labels
+    fig.add_annotation(
+        text='Step-by-step', xref="x domain", yref="y domain",
+        x=0.5, y=0.5, showarrow=False, font=dict(size=10),
+        row=1, col=1
+    )
+    fig.add_annotation(
+        text='Direct', xref="x domain", yref="y domain",
+        x=0.5, y=0.5, showarrow=False, font=dict(size=10),
+        row=2, col=1
+    )
 
     # Plot step-by-step diffusion
     for i, t in enumerate(timesteps):
-        axes[0, i + 1].imshow(tensor_to_image(xs[t]), cmap='gray')
-        axes[0, i + 1].set_title(f't={t}')
-        axes[0, i + 1].axis('off')
+        step_img = tensor_to_image(xs[t]).squeeze()[::-1]
+        fig.add_trace(
+            go.Heatmap(z=step_img, colorscale='gray', showscale=False),
+            row=1, col=i + 2
+        )
+        # Add title annotation for each column
+        fig.add_annotation(
+            text=f't={t}',
+            xref=f'x{i + 2} domain', yref=f'y{i + 2} domain',
+            x=0.5, y=1.15, showarrow=False, font=dict(size=10)
+        )
 
         # Plot direct diffusion for comparison
         xt, _ = q_xt_x0(img, t)
-        axes[1, i + 1].imshow(tensor_to_image(xt), cmap='gray')
-        axes[1, i + 1].axis('off')
+        direct_img = tensor_to_image(xt).squeeze()[::-1]
+        fig.add_trace(
+            go.Heatmap(z=direct_img, colorscale='gray', showscale=False),
+            row=2, col=i + 2
+        )
 
-    fig.suptitle(f'Forward Diffusion Process (Label: {label})')
-    plt.tight_layout()
+    fig.update_layout(
+        title_text=f'Forward Diffusion Process (Label: {label})',
+        width=200 * n_plots,
+        height=500,
+        showlegend=False
+    )
 
-    if save_path is None:
-        save_path = os.path.join(PLOTS_DIR, 'forward_diffusion.png')
-    fig.savefig(save_path)
-    print(f"Saved forward diffusion visualization to {save_path}")
-    plt.close(fig)
+    # Hide axes for all subplots
+    fig.update_xaxes(showticklabels=False, showgrid=False, zeroline=False)
+    fig.update_yaxes(showticklabels=False, showgrid=False, zeroline=False)
+
+    if save_path:
+        save_plot(fig, save_path)
+
+    return fig
 
 
-def visualize_backward_diffusion(model: torch.nn.Module, save_path: str | None = None):
+def visualize_backward_diffusion(model: torch.nn.Module, save_path: str | None = None) -> go.Figure:
     """
     Visualize the backward (reverse) diffusion process.
 
     Args:
         model: Trained UNet model
         save_path: Path to save the visualization
+    Returns:
+        Plotly figure object
     """
     ensure_dirs()
     model.eval()
@@ -134,7 +168,8 @@ def visualize_backward_diffusion(model: torch.nn.Module, save_path: str | None =
     n_timesteps = 10
     timesteps = np.linspace(1, DIFFU_STEPS, n_timesteps, dtype=int)[::-1]
 
-    fig, axes = plt.subplots(n_classes, n_timesteps, figsize=(2 * n_timesteps, 2 * n_classes))
+    # Store images to plot later
+    images_to_plot = {}
 
     with torch.no_grad():
         # Start from noise
@@ -151,25 +186,60 @@ def visualize_backward_diffusion(model: torch.nn.Module, save_path: str | None =
             if t in timesteps:
                 t_idx = timesteps.tolist().index(t)
                 for class_idx in range(n_classes):
-                    axes[class_idx, t_idx].imshow(tensor_to_image(x[class_idx]), cmap='gray')
-                    if class_idx == 0:
-                        axes[class_idx, t_idx].set_title(f't={t}')
-                    if t_idx == 0:
-                        axes[class_idx, t_idx].set_ylabel(f'Class {class_idx}')
-                    axes[class_idx, t_idx].set_xticks([])
-                    axes[class_idx, t_idx].set_yticks([])
+                    images_to_plot[(class_idx, t_idx)] = {
+                        'img': tensor_to_image(x[class_idx]).squeeze()[::-1],
+                        't': t
+                    }
 
-    fig.suptitle('Backward Diffusion Process')
-    plt.tight_layout()
+    # Create plotly figure
+    fig = make_subplots(
+        rows=n_classes, cols=n_timesteps,
+        horizontal_spacing=0.01,
+        vertical_spacing=0.02
+    )
 
-    if save_path is None:
-        save_path = os.path.join(PLOTS_DIR, 'backward_diffusion.png')
-    fig.savefig(save_path)
-    print(f"Saved backward diffusion visualization to {save_path}")
-    plt.close(fig)
+    for class_idx in range(n_classes):
+        for t_idx in range(n_timesteps):
+            data = images_to_plot[(class_idx, t_idx)]
+            fig.add_trace(
+                go.Heatmap(z=data['img'], colorscale='gray', showscale=False),
+                row=class_idx + 1, col=t_idx + 1
+            )
+            # Add column titles for first row
+            if class_idx == 0:
+                fig.add_annotation(
+                    text=f"t={data['t']}",
+                    xref=f'x{t_idx + 1} domain', yref=f'y{t_idx + 1} domain',
+                    x=0.5, y=1.15, showarrow=False, font=dict(size=10)
+                )
+            # Add row labels for first column
+            if t_idx == 0:
+                fig.add_annotation(
+                    text=f'Class {class_idx}',
+                    xref=f'x{class_idx * n_timesteps + 1} domain',
+                    yref=f'y{class_idx * n_timesteps + 1} domain',
+                    x=-0.2, y=0.5, showarrow=False, font=dict(size=10),
+                    textangle=-90
+                )
+
+    fig.update_layout(
+        title_text='Backward Diffusion Process',
+        width=200 * n_timesteps,
+        height=200 * n_classes,
+        showlegend=False
+    )
+
+    # Hide axes for all subplots
+    fig.update_xaxes(showticklabels=False, showgrid=False, zeroline=False)
+    fig.update_yaxes(showticklabels=False, showgrid=False, zeroline=False)
+
+    if save_path is not None:
+        save_plot(fig, save_path)
+
+    return fig
 
 
-def generate_grid(model: torch.nn.Module, n_per_class: int = 10, save_path: str | None = None):
+def generate_grid(model: torch.nn.Module, n_per_class: int = 10, save_path: str | None = None) -> go.Figure:
     """
     Generate a grid of samples, organized by class.
 
@@ -177,6 +247,8 @@ def generate_grid(model: torch.nn.Module, n_per_class: int = 10, save_path: str 
         model: Trained UNet model
         n_per_class: Number of samples per class
         save_path: Path to save the grid
+    Returns:
+        Plotly figure object
     """
     ensure_dirs()
 
@@ -188,26 +260,45 @@ def generate_grid(model: torch.nn.Module, n_per_class: int = 10, save_path: str 
     samples = generate_samples(model, labels=labels)
     samples = samples.cpu().numpy()
 
-    # Create grid
-    fig, axes = plt.subplots(NB_LABEL, n_per_class, figsize=(n_per_class, NB_LABEL))
+    # Create plotly grid
+    fig = make_subplots(
+        rows=NB_LABEL, cols=n_per_class,
+        horizontal_spacing=0.01,
+        vertical_spacing=0.02
+    )
 
     for class_idx in range(NB_LABEL):
         for sample_idx in range(n_per_class):
             idx = class_idx * n_per_class + sample_idx
-            axes[class_idx, sample_idx].imshow(samples[idx].transpose(1, 2, 0).squeeze(), cmap='gray')
-            axes[class_idx, sample_idx].axis('off')
-
+            img = samples[idx].transpose(1, 2, 0).squeeze()[::-1]
+            fig.add_trace(
+                go.Heatmap(z=img, colorscale='gray', showscale=False),
+                row=class_idx + 1, col=sample_idx + 1
+            )
+            # Add row labels for first column
             if sample_idx == 0:
-                axes[class_idx, sample_idx].set_ylabel(f'{class_idx}')
+                fig.add_annotation(
+                    text=f'{class_idx}',
+                    xref=f'x{class_idx * n_per_class + 1} domain',
+                    yref=f'y{class_idx * n_per_class + 1} domain',
+                    x=-0.2, y=0.5, showarrow=False, font=dict(size=10)
+                )
 
-    fig.suptitle('Generated MNIST Digits')
-    plt.tight_layout()
+    fig.update_layout(
+        title_text='Generated MNIST Digits',
+        width=100 * n_per_class,
+        height=100 * NB_LABEL,
+        showlegend=False
+    )
 
-    if save_path is None:
-        save_path = os.path.join(PLOTS_DIR, 'generated_grid.png')
-    fig.savefig(save_path)
-    print(f"Saved generated grid to {save_path}")
-    plt.close(fig)
+    # Hide axes for all subplots
+    fig.update_xaxes(showticklabels=False, showgrid=False, zeroline=False)
+    fig.update_yaxes(showticklabels=False, showgrid=False, zeroline=False)
+
+    if save_path:
+        save_plot(fig, save_path)
+
+    return fig
 
 
 if __name__ == "__main__":

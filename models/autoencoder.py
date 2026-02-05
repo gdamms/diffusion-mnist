@@ -60,7 +60,7 @@ class Autoencoder(AEModule):
             nn.Conv2d(64, latent_channels, kernel_size=3, padding=1),
             nn.ReLU(),
 
-            # 7x7 -> 8x8 (no activation - latent space should be unconstrained)
+            # 7x7 -> 8x8
             nn.Conv2d(latent_channels, latent_channels, kernel_size=2, padding=1),
         )
 

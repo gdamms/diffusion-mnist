@@ -9,7 +9,8 @@ from src.config import DEVICE, BATCH_SIZE, NUM_WORKERS, CHECKPOINT_DIR, PLOTS_DI
 import os
 import torch
 import torch.nn as nn
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from rich.progress import track
 import mlflow
 
@@ -56,8 +57,9 @@ def train_autoencoder(
 
     # Setup training
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    # Use MSE loss instead of BCE for better reconstruction of continuous values
-    criterion = nn.MSELoss()
+    # criterion = nn.BCELoss()
+    # criterion = nn.MSELoss()
+    criterion = nn.functional.binary_cross_entropy
 
     # Get dataloader
     dataloader = get_autoencoder_dataloader(
@@ -80,9 +82,6 @@ def train_autoencoder(
             # Backward pass
             loss.backward()
 
-            # Gradient clipping to prevent exploding gradients
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
             optimizer.step()
 
             epoch_loss += loss.item()
@@ -94,14 +93,16 @@ def train_autoencoder(
         save_checkpoint(model, f"autoencoder_epoch_{epoch:03d}.pt")
         save_checkpoint(model, "autoencoder_latest.pt")
 
-    # Visualize results
-    visualize_reconstructions(model, dataloader)
+        # Visualize results
+        fig = visualize_reconstructions(model, dataloader)
+
+        mlflow.log_figure(fig, f"reconstructions/epoch_{epoch:03d}.png")
 
     mlflow.end_run()
     return model
 
 
-def visualize_reconstructions(model: AEModule, dataloader, n_samples: int = 10):
+def visualize_reconstructions(model: AEModule, dataloader, n_samples: int = 10) -> go.Figure:
     """Visualize original, latent, and reconstructed images."""
     model.eval()
     ensure_dirs()
@@ -114,34 +115,56 @@ def visualize_reconstructions(model: AEModule, dataloader, n_samples: int = 10):
         latent = model.encode(x_batch)
         x_recon = model.decode(latent)
 
-    # Create visualization
-    fig, axes = plt.subplots(3, n_samples + 1, figsize=(2 * n_samples, 6))
+    # Create visualization with plotly
+    fig = make_subplots(
+        rows=3, cols=n_samples + 1,
+        subplot_titles=[''] * (3 * (n_samples + 1)),
+        horizontal_spacing=0.01,
+        vertical_spacing=0.05
+    )
 
-    # Labels
-    axes[0, 0].text(0.5, 0.5, 'Original', ha='center', va='center', fontsize=12)
-    axes[0, 0].axis('off')
-    axes[1, 0].text(0.5, 0.5, 'Latent', ha='center', va='center', fontsize=12)
-    axes[1, 0].axis('off')
-    axes[2, 0].text(0.5, 0.5, 'Reconstructed', ha='center', va='center', fontsize=12)
-    axes[2, 0].axis('off')
+    # Add row labels as annotations
+    row_labels = ['Original', 'Latent', 'Reconstructed']
+    for row_idx, label in enumerate(row_labels):
+        fig.add_annotation(
+            text=label,
+            xref="x domain", yref="y domain",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=12),
+            row=row_idx + 1, col=1
+        )
 
     # Plot images
     for i in range(n_samples):
-        axes[0, i + 1].imshow(x_batch[i].cpu().squeeze().numpy(), cmap='gray')
-        axes[0, i + 1].axis('off')
+        # Original
+        fig.add_trace(
+            go.Heatmap(z=x_batch[i].cpu().squeeze().numpy()[::-1], colorscale='gray', showscale=False),
+            row=1, col=i + 2
+        )
+        # Latent
+        fig.add_trace(
+            go.Heatmap(z=latent[i].cpu().squeeze().numpy()[::-1], colorscale='gray', showscale=False),
+            row=2, col=i + 2
+        )
+        # Reconstructed
+        fig.add_trace(
+            go.Heatmap(z=x_recon[i].cpu().squeeze().numpy()[::-1], colorscale='gray', showscale=False),
+            row=3, col=i + 2
+        )
 
-        axes[1, i + 1].imshow(latent[i].cpu().squeeze().numpy(), cmap='gray')
-        axes[1, i + 1].axis('off')
+    fig.update_layout(
+        title_text='Autoencoder Results',
+        width=200 * n_samples,
+        height=600,
+        showlegend=False
+    )
 
-        axes[2, i + 1].imshow(x_recon[i].cpu().squeeze().numpy(), cmap='gray')
-        axes[2, i + 1].axis('off')
+    # Hide axes for all subplots
+    fig.update_xaxes(showticklabels=False, showgrid=False, zeroline=False)
+    fig.update_yaxes(showticklabels=False, showgrid=False, zeroline=False)
 
-    fig.suptitle('Autoencoder Results')
-    plt.tight_layout()
-
-    save_path = os.path.join(PLOTS_DIR, 'autoencoder_results.png')
-    fig.savefig(save_path)
-    plt.close(fig)
+    return fig
 
 
 if __name__ == "__main__":
