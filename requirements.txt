@@ -1,5 +1,6 @@
-torchvision==0.15.2
-matplotlib==3.8.0
-rich==13.3.5
-PyQt5==5.15.10
-torch-trainer @ git+https://github.com/gdamms/torch-trainer.git@da70ca78adf6195f2e3add92938b9c282d5c94cb
+torch
+torchvision
+mlflow
+scipy
+matplotlib
+rich
