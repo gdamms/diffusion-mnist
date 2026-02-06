@@ -5,7 +5,7 @@ Training script for MNIST autoencoder.
 from models import Autoencoder, AEModule
 from src.utils import ensure_dirs, save_checkpoint
 from src.dataloader import get_autoencoder_dataloaders
-from src.config import DEVICE, BATCH_SIZE, NUM_WORKERS, CHECKPOINT_DIR, PLOTS_DIR
+from src.config import DEVICE, BATCH_SIZE, NUM_WORKERS
 import os
 import torch
 import torch.nn as nn
@@ -19,12 +19,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def train_autoencoder(
-    epochs: int = 10,
+    epochs: int | None = None,
     learning_rate: float = 1e-3,
     batch_size: int = BATCH_SIZE,
     latent_channels: int = 1,
     val_split: float = 0.1,
     test_split: float = 0.1,
+    patience: int | None = 5,
     checkpoint_path: str | None = None,
     run_name: str | None = None,
 ):
@@ -38,9 +39,15 @@ def train_autoencoder(
         latent_channels: Number of channels in latent space
         val_split: Fraction of data for validation
         test_split: Fraction of data for testing
+        patience: Number of epochs to wait for validation loss improvement before stopping
         checkpoint_path: Path to checkpoint to resume training from
         run_name: Name for this training run (for logging)
     """
+    if epochs is None and patience is None:
+        raise ValueError("Must specify either epochs or patience for training")
+    if patience is not None and patience <= 0:
+        raise ValueError("Patience must be a positive integer")
+
     ensure_dirs()
 
     # Initialize model
@@ -61,8 +68,6 @@ def train_autoencoder(
 
     # Setup training
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    # criterion = nn.BCELoss()
-    # criterion = nn.MSELoss()
     criterion = nn.functional.binary_cross_entropy
 
     # Get dataloaders
@@ -73,12 +78,26 @@ def train_autoencoder(
         test_split=test_split,
     )
 
+    # Early stopping tracking
+    best_val_loss = float('inf')
+    epochs_without_improvement = 0
+
     # Training loop
-    for epoch in range(1, epochs + 1):
+    epoch = 0
+    while epochs is None or epoch < epochs:
+        epoch += 1
+
         model.train()
         epoch_loss = 0.0
 
-        for batch_idx, (x, target) in enumerate(track(train_loader, description=f"Epoch {epoch}/{epochs}")):
+        if epochs:
+            description = f"Epoch {epoch}/{epochs}"
+        else:
+            description = f"Epoch {epoch}"
+        if patience:
+            description += f" (Patience: {patience-epochs_without_improvement})"
+
+        for batch_idx, (x, target) in enumerate(track(train_loader, description=description)):
             optimizer.zero_grad()
 
             # Forward pass
@@ -93,17 +112,31 @@ def train_autoencoder(
             epoch_loss += loss.item()
 
         avg_loss = epoch_loss / len(train_loader)
-        mlflow.log_metric("train_loss", avg_loss, step=epoch)
+        mlflow.log_metric("train/loss", avg_loss, step=epoch)
 
         val_loss = evaluate_autoencoder(model, val_loader, criterion)
         test_loss = evaluate_autoencoder(model, test_loader, criterion)
 
-        mlflow.log_metric("val_loss", val_loss, step=epoch)
-        mlflow.log_metric("test_loss", test_loss, step=epoch)
+        mlflow.log_metric("val/loss", val_loss, step=epoch)
+        mlflow.log_metric("test/loss", test_loss, step=epoch)
 
-        # Save checkpoint
+        # Early stopping check
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            epochs_without_improvement = 0
+            # Save best checkpoint
+            save_checkpoint(model, "autoencoder_best.pt")
+        else:
+            epochs_without_improvement += 1
+
+        # Save regular checkpoints
         save_checkpoint(model, f"autoencoder_epoch_{epoch:03d}.pt")
         save_checkpoint(model, "autoencoder_latest.pt")
+
+        # Stop if no improvement
+        if patience and epochs_without_improvement >= patience:
+            print(f"Early stopping: No improvement for {patience} epochs")
+            break
 
         # Visualize results
         train_fig = visualize_reconstructions(model, train_loader)
@@ -205,12 +238,13 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Train MNIST autoencoder")
-    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
+    parser.add_argument("--epochs", type=int, default=None, help="Number of epochs")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size")
     parser.add_argument("--latent-channels", type=int, default=1, help="Latent channels")
     parser.add_argument("--val-split", type=float, default=0.1, help="Validation split fraction")
     parser.add_argument("--test-split", type=float, default=0.1, help="Test split fraction")
+    parser.add_argument("--patience", type=int, default=5, help="Early stopping patience")
     parser.add_argument("--checkpoint", type=str, default=None, help="Resume from checkpoint")
 
     args = parser.parse_args()
@@ -224,5 +258,6 @@ if __name__ == "__main__":
         latent_channels=args.latent_channels,
         val_split=args.val_split,
         test_split=args.test_split,
+        patience=args.patience,
         checkpoint_path=args.checkpoint,
     )
