@@ -4,7 +4,7 @@ Training script for MNIST autoencoder.
 
 from models import Autoencoder, AEModule
 from src.utils import ensure_dirs, save_checkpoint
-from src.dataloader import get_autoencoder_dataloader
+from src.dataloader import get_autoencoder_dataloaders
 from src.config import DEVICE, BATCH_SIZE, NUM_WORKERS, CHECKPOINT_DIR, PLOTS_DIR
 import os
 import torch
@@ -23,6 +23,8 @@ def train_autoencoder(
     learning_rate: float = 1e-3,
     batch_size: int = BATCH_SIZE,
     latent_channels: int = 1,
+    val_split: float = 0.1,
+    test_split: float = 0.1,
     checkpoint_path: str | None = None,
     run_name: str | None = None,
 ):
@@ -34,6 +36,8 @@ def train_autoencoder(
         learning_rate: Learning rate for optimizer
         batch_size: Training batch size
         latent_channels: Number of channels in latent space
+        val_split: Fraction of data for validation
+        test_split: Fraction of data for testing
         checkpoint_path: Path to checkpoint to resume training from
         run_name: Name for this training run (for logging)
     """
@@ -61,10 +65,12 @@ def train_autoencoder(
     # criterion = nn.MSELoss()
     criterion = nn.functional.binary_cross_entropy
 
-    # Get dataloader
-    dataloader = get_autoencoder_dataloader(
+    # Get dataloaders
+    train_loader, val_loader, test_loader = get_autoencoder_dataloaders(
         batch_size=batch_size,
         num_workers=NUM_WORKERS,
+        val_split=val_split,
+        test_split=test_split,
     )
 
     # Training loop
@@ -72,7 +78,7 @@ def train_autoencoder(
         model.train()
         epoch_loss = 0.0
 
-        for batch_idx, (x, target) in enumerate(track(dataloader, description=f"Epoch {epoch}/{epochs}")):
+        for batch_idx, (x, target) in enumerate(track(train_loader, description=f"Epoch {epoch}/{epochs}")):
             optimizer.zero_grad()
 
             # Forward pass
@@ -86,20 +92,48 @@ def train_autoencoder(
 
             epoch_loss += loss.item()
 
-        avg_loss = epoch_loss / len(dataloader)
-        mlflow.log_metric("epoch_loss", avg_loss, step=epoch)
+        avg_loss = epoch_loss / len(train_loader)
+        mlflow.log_metric("train_loss", avg_loss, step=epoch)
+
+        val_loss = evaluate_autoencoder(model, val_loader, criterion)
+        test_loss = evaluate_autoencoder(model, test_loader, criterion)
+
+        mlflow.log_metric("val_loss", val_loss, step=epoch)
+        mlflow.log_metric("test_loss", test_loss, step=epoch)
 
         # Save checkpoint
         save_checkpoint(model, f"autoencoder_epoch_{epoch:03d}.pt")
         save_checkpoint(model, "autoencoder_latest.pt")
 
         # Visualize results
-        fig = visualize_reconstructions(model, dataloader)
+        train_fig = visualize_reconstructions(model, train_loader)
+        val_fig = visualize_reconstructions(model, val_loader)
+        test_fig = visualize_reconstructions(model, test_loader)
 
-        mlflow.log_figure(fig, f"reconstructions/epoch_{epoch:03d}.png")
+        mlflow.log_figure(train_fig, f"train/epoch_{epoch:03d}.png")
+        mlflow.log_figure(val_fig, f"val/epoch_{epoch:03d}.png")
+        mlflow.log_figure(test_fig, f"test/epoch_{epoch:03d}.png")
 
     mlflow.end_run()
     return model
+
+
+def evaluate_autoencoder(
+    model: AEModule,
+    dataloader,
+    criterion,
+) -> float:
+    """Evaluate autoencoder and return average loss."""
+    model.eval()
+    total_loss = 0.0
+
+    with torch.no_grad():
+        for x, target in dataloader:
+            x_recon = model(x)
+            loss = criterion(x_recon, target)
+            total_loss += loss.item()
+
+    return total_loss / len(dataloader)
 
 
 def visualize_reconstructions(model: AEModule, dataloader, n_samples: int = 10) -> go.Figure:
@@ -175,6 +209,8 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size")
     parser.add_argument("--latent-channels", type=int, default=1, help="Latent channels")
+    parser.add_argument("--val-split", type=float, default=0.1, help="Validation split fraction")
+    parser.add_argument("--test-split", type=float, default=0.1, help="Test split fraction")
     parser.add_argument("--checkpoint", type=str, default=None, help="Resume from checkpoint")
 
     args = parser.parse_args()
@@ -186,5 +222,7 @@ if __name__ == "__main__":
         learning_rate=args.lr,
         batch_size=args.batch_size,
         latent_channels=args.latent_channels,
+        val_split=args.val_split,
+        test_split=args.test_split,
         checkpoint_path=args.checkpoint,
     )
